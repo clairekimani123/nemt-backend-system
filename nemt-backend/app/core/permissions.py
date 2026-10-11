@@ -28,6 +28,7 @@ class Permission(StrEnum):
     SETTINGS_WRITE = "settings:write"
     PATIENTS_READ = "patients:read"
     PATIENTS_WRITE = "patients:write"
+    PATIENTS_SENSITIVE = "patients:sensitive"  # full DOB + Medicaid ID + clinical notes
     TRIPS_READ = "trips:read"
     TRIPS_WRITE = "trips:write"
     DISPATCH = "dispatch:manage"
@@ -40,6 +41,7 @@ class Permission(StrEnum):
     BILLING_READ = "billing:read"
     BILLING_WRITE = "billing:write"
     REPORTS_READ = "reports:read"
+    COMPLIANCE_READ = "compliance:read"  # expiring licences / insurance / documents
     DRIVER_APP = "driver:app"  # own-trip scope enforced in services
     PASSENGER_PORTAL = "passenger:portal"  # own-trip scope enforced in services
     FACILITY_PORTAL = "facility:portal"
@@ -56,11 +58,12 @@ ROLE_PERMISSIONS: dict[Role, set[Permission]] = {
         P.DRIVERS_READ, P.VEHICLES_READ, P.FACILITIES_READ, P.REPORTS_READ,
     },
     Role.BILLING_STAFF: {
-        P.BILLING_READ, P.BILLING_WRITE, P.TRIPS_READ, P.PATIENTS_READ,
+        P.BILLING_READ, P.BILLING_WRITE, P.TRIPS_READ, P.PATIENTS_READ, P.PATIENTS_SENSITIVE,
         P.FACILITIES_READ, P.REPORTS_READ,
     },
     Role.FLEET_MANAGER: {
         P.VEHICLES_READ, P.VEHICLES_WRITE, P.DRIVERS_READ, P.DRIVERS_WRITE, P.REPORTS_READ,
+        P.COMPLIANCE_READ,
     },
     Role.DRIVER: {P.DRIVER_APP},
     Role.PASSENGER: {P.PASSENGER_PORTAL},

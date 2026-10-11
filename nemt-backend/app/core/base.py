@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import DateTime, ForeignKey, MetaData, func
+from sqlalchemy import DateTime, Enum, ForeignKey, MetaData, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from uuid6 import uuid7
 
@@ -40,3 +40,16 @@ class TenantMixin:
     company_id: Mapped[UUID] = mapped_column(
         ForeignKey("companies.id", ondelete="RESTRICT"), index=True
     )
+
+
+def str_enum(cls: type, name: str, length: int = 32) -> Enum:
+    """Enum stored as VARCHAR + CHECK (easy to migrate, unlike native PG enums)."""
+    return Enum(cls, native_enum=False, length=length, create_constraint=True, name=name,
+                values_callable=lambda e: [m.value for m in e])
+
+
+class ArchiveMixin:
+    """Soft delete. Medical-adjacent records must be retained (HIPAA: 6 years), so the
+    app never hard-deletes them; the DB role isn't even granted DELETE."""
+
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

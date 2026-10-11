@@ -5,6 +5,7 @@ Revises: ${down_revision | comma,n}
 """
 from alembic import op
 import sqlalchemy as sa
+import geoalchemy2  # noqa: F401  (Geography columns)
 ${imports if imports else ""}
 
 revision = ${repr(up_revision)}

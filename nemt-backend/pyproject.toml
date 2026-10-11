@@ -22,6 +22,9 @@ dependencies = [
   "uuid6>=2024.1.12",
   "celery[redis]>=5.4",
   "redis>=5.0",
+  "geoalchemy2>=0.15",
+  "python-multipart>=0.0.9",
+  "python-dateutil>=2.9",
 ]
 
 [project.optional-dependencies]
@@ -39,10 +42,14 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+extend-exclude = ["migrations/versions"]  # applied migrations are history: never reformat them
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "RUF"]
 ignore = ["E501"]  # formatting is not enforced on line length yet
 
 [tool.ruff.lint.flake8-bugbear]
-extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Header", "app.core.deps.require_permission"]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Header", "app.core.deps.require_permission", "fastapi.Form", "fastapi.File"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["RUF059"]  # `a, b = fixture` with one side unused is normal in tests

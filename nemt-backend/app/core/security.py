@@ -1,4 +1,6 @@
 import hashlib
+import hmac
+import re
 import secrets
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
@@ -101,3 +103,23 @@ def decrypt_field(token: str) -> str:
 # ---- TOTP MFA ----------------------------------------------------------------
 def verify_totp(secret: str, code: str) -> bool:
     return pyotp.TOTP(secret).verify(code, valid_window=1)
+
+
+def encrypt_bytes(data: bytes) -> bytes:
+    return _fernet().encrypt(data)
+
+
+def decrypt_bytes(token: bytes) -> bytes:
+    return _fernet().decrypt(token)
+
+
+def blind_index(value: str) -> str:
+    """Keyed hash for equality search/dedup on an encrypted field.
+
+    Same input -> same output, so `WHERE medicaid_id_hash = ...` works without
+    decrypting every row; but without the key the hashes can't be brute-forced
+    (a plain SHA-256 of a short ID could be). Normalised so 'ab-12 34' == 'AB1234'.
+    """
+    normalised = re.sub(r"[\s-]", "", value).upper()
+    return hmac.new(settings.blind_index_key.get_secret_value().encode(),
+                    normalised.encode(), hashlib.sha256).hexdigest()

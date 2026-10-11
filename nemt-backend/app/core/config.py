@@ -22,6 +22,20 @@ class Settings(BaseSettings):
     password_reset_minutes: int = 30
 
     field_encryption_keys: str  # comma-separated Fernet keys, newest first
+    blind_index_key: SecretStr  # HMAC key for searchable-but-encrypted fields (e.g. Medicaid ID)
+
+    geocoder_backend: str = "none"  # none | fake   (real adapters: see app/core/geo.py)
+    storage_dir: str = "./var/storage"
+    max_upload_mb: int = 10
+
+    # --- trip engine rules (all tunable per deployment) ---
+    default_trip_minutes: int = 45      # used when a trip has no duration estimate
+    trip_buffer_minutes: int = 10       # gap a driver/vehicle needs between two trips
+    late_grace_minutes: int = 10        # pickup is "late" this long after the scheduled time
+    at_risk_hours: int = 2              # unassigned trip this close to pickup = "at risk"
+    no_show_wait_minutes: int = 10      # a driver must wait this long before marking a no-show
+    late_cancel_hours: int = 2          # cancelling this close to pickup = late cancellation
+    recurring_horizon_days: int = 30    # how far ahead recurring series create real trips
 
     max_failed_logins: int = 5
     lockout_minutes: int = 15

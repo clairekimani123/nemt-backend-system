@@ -1,6 +1,7 @@
 import os
 import subprocess
 import sys
+import tempfile
 
 from cryptography.fernet import Fernet
 
@@ -8,6 +9,9 @@ from cryptography.fernet import Fernet
 os.environ["ENV"] = "test"
 os.environ["MAIL_BACKEND"] = "memory"
 os.environ["CELERY_ALWAYS_EAGER"] = "true"
+os.environ.setdefault("BLIND_INDEX_KEY", "test-blind-index-key-test-blind-index-key")
+os.environ["GEOCODER_BACKEND"] = "fake"
+os.environ["STORAGE_DIR"] = tempfile.mkdtemp(prefix="nemt-test-storage-")
 os.environ.setdefault("JWT_SECRET", "test-secret-test-secret-test-secret-123")
 os.environ.setdefault("FIELD_ENCRYPTION_KEYS", Fernet.generate_key().decode())
 # Tests ALWAYS use the dedicated *_test database (they TRUNCATE tables). Never the dev DB.
@@ -20,16 +24,21 @@ assert os.environ["DATABASE_URL"].endswith("_test") and os.environ["DATABASE_OWN
 
 import pytest  # noqa: E402
 import pytest_asyncio  # noqa: E402
+from argon2 import PasswordHasher  # noqa: E402
 from httpx import ASGITransport, AsyncClient  # noqa: E402
 from sqlalchemy import text  # noqa: E402
 from sqlalchemy.ext.asyncio import create_async_engine  # noqa: E402
 from sqlalchemy.pool import NullPool  # noqa: E402
 
+# Tests only: cheap argon2 parameters so the suite is fast. Production keeps the strong defaults.
+import app.core.security as _security  # noqa: E402
 from app.core.config import settings  # noqa: E402
 from app.core.mail import MemoryMailer  # noqa: E402
 from app.main import app  # noqa: E402
 from app.scripts.bootstrap import main as bootstrap_super_admin  # noqa: E402
 from tests.helpers import PW, login  # noqa: E402
+
+_security._ph = PasswordHasher(time_cost=1, memory_cost=8, parallelism=1)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -41,10 +50,10 @@ def _migrate():
 async def _clean_db():
     eng = create_async_engine(settings.database_owner_url, poolclass=NullPool)
     async with eng.begin() as conn:
-        await conn.execute(text(
-            "TRUNCATE audit_logs, password_reset_tokens, refresh_tokens, users, companies"
-            " RESTART IDENTITY CASCADE"
-        ))
+        names = (await conn.execute(text(
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'public'"
+            " AND tablename NOT IN ('alembic_version', 'spatial_ref_sys')"))).scalars().all()
+        await conn.execute(text(f"TRUNCATE {', '.join(names)} RESTART IDENTITY CASCADE"))
     await eng.dispose()
     MemoryMailer.outbox.clear()
 

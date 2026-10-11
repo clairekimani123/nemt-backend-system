@@ -207,6 +207,14 @@ async def logout(raw: str) -> None:
             await db.commit()
 
 
+async def revoke_user_sessions(db: AsyncSession, user_id: UUID) -> None:
+    await db.execute(
+        update(RefreshToken)
+        .where(RefreshToken.user_id == user_id, RefreshToken.revoked_at.is_(None))
+        .values(revoked_at=utcnow())
+    )
+
+
 # ---- password reset ------------------------------------------------------------------
 async def forgot_password(db: AsyncSession, company_id: UUID, email: str, request: Request) -> None:
     from app.workers.tasks import send_email  # local import: keeps API import light

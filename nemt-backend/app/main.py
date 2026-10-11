@@ -8,8 +8,15 @@ from app.core.config import settings
 from app.core.db import SessionLocal, engine
 from app.modules.audit.router import router as audit_router
 from app.modules.auth.router import router as auth_router
+from app.modules.compliance.router import router as compliance_router
+from app.modules.documents.router import router as documents_router
+from app.modules.drivers.router import router as drivers_router
+from app.modules.facilities.router import brokers_router
+from app.modules.facilities.router import router as facilities_router
+from app.modules.patients.router import router as patients_router
 from app.modules.tenants.router import router as platform_router
 from app.modules.users.router import router as users_router
+from app.modules.vehicles.router import router as vehicles_router
 
 
 @asynccontextmanager
@@ -49,5 +56,6 @@ async def ready():
     return {"status": "ready"}
 
 
-for r in (auth_router, users_router, audit_router, platform_router):
+for r in (auth_router, users_router, audit_router, platform_router, patients_router, drivers_router,
+          vehicles_router, facilities_router, brokers_router, documents_router, compliance_router):
     app.include_router(r)

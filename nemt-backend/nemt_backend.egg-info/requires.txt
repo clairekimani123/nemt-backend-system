@@ -13,6 +13,8 @@ cryptography>=42
 uuid6>=2024.1.12
 celery[redis]>=5.4
 redis>=5.0
+geoalchemy2>=0.15
+python-multipart>=0.0.9
 
 [dev]
 pytest>=8
