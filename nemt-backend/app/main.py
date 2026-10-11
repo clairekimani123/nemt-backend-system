@@ -15,6 +15,10 @@ from app.modules.facilities.router import brokers_router
 from app.modules.facilities.router import router as facilities_router
 from app.modules.patients.router import router as patients_router
 from app.modules.tenants.router import router as platform_router
+from app.modules.trips.driver_router import router as driver_app_router
+from app.modules.trips.recurring_router import router as recurring_router
+from app.modules.trips.router import board_router
+from app.modules.trips.router import router as trips_router
 from app.modules.users.router import router as users_router
 from app.modules.vehicles.router import router as vehicles_router
 
@@ -57,5 +61,6 @@ async def ready():
 
 
 for r in (auth_router, users_router, audit_router, platform_router, patients_router, drivers_router,
-          vehicles_router, facilities_router, brokers_router, documents_router, compliance_router):
+          vehicles_router, facilities_router, brokers_router, documents_router, compliance_router, trips_router, board_router, recurring_router,
+          driver_app_router):
     app.include_router(r)

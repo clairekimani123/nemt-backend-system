@@ -1,4 +1,5 @@
 from celery import Celery
+from celery.schedules import crontab
 
 from app.core.config import settings
 
@@ -12,4 +13,10 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,    # fair dispatch for long tasks
     task_time_limit=120,
     timezone="UTC",
+    beat_schedule={
+        "materialize-recurring-trips": {
+            "task": "app.workers.tasks.materialize_recurring_trips",
+            "schedule": crontab(hour=2, minute=0),  # 02:00 UTC every night
+        },
+    },
 )
