@@ -151,3 +151,30 @@ async def check_assignment(
 
 def _ref(t: Trip) -> str:
     return f"T-{t.trip_number:06d}"
+
+
+def static_report(trip: Trip, driver: Driver, driver_active: bool, vehicle: Vehicle, trip_date) -> Report:
+    """Same checks as check_assignment but WITHOUT the DB round-trip for existing trips.
+
+    Used by the solver's pre-pass to decide compatibility. The service layer runs the
+    full check_assignment() before applying a plan.
+    """
+    from datetime import date as _date
+    r = Report()
+    need = load_of(trip.mobility, trip.escort_count)
+    if driver.archived_at is not None or not driver_active:
+        r.errors.append(Issue("driver_inactive", "Driver is not active"))
+    if vehicle.archived_at is not None or vehicle.status != VehicleStatus.ACTIVE:
+        r.errors.append(Issue("vehicle_not_active", f"Vehicle {vehicle.unit_number} is {vehicle.status.value}"))
+    if _over(need, vehicle):
+        r.errors.append(Issue("vehicle_cannot_carry",
+                              f"Vehicle {vehicle.unit_number} cannot carry this trip"))
+    if (trip.mobility in WHEELCHAIR or trip.mobility == MobilityType.STRETCHER) and not driver.wheelchair_certified:
+        r.errors.append(Issue("driver_not_certified", "Driver is not certified for wheelchair/stretcher passengers"))
+    _expiry(r, "Driver's licence", "driver_license", driver.license_expires_on, trip_date)
+    _expiry(r, "Driver's medical card", "driver_medical_cert", driver.medical_cert_expires_on, trip_date)
+    _expiry(r, f"Vehicle {vehicle.unit_number} registration", "vehicle_registration",
+            vehicle.registration_expires_on, trip_date)
+    _expiry(r, f"Vehicle {vehicle.unit_number} insurance", "vehicle_insurance",
+            vehicle.insurance_expires_on, trip_date)
+    return r

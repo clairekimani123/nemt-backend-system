@@ -105,8 +105,10 @@ def vin(n: int) -> str:
 
 async def new_patient(client, headers, n: int = 1, **kw) -> dict:
     """A patient with a saved home address. Returns {'id', 'address_id'}."""
-    payload = patient_payload(first_name=f"Pat{n}", last_name=f"Test{n}", medicaid_id=f"MD-{n:06d}",
-                              mobility="ambulatory", home_address=HOME_ADDRESS, **kw)
+    defaults = dict(first_name=f"Pat{n}", last_name=f"Test{n}", medicaid_id=f"MD-{n:06d}",
+     mobility="ambulatory", home_address=HOME_ADDRESS)
+    defaults.update(kw)   # caller-supplied overrides win
+    payload = patient_payload(**defaults)
     r = await client.post("/patients", headers=headers, json=payload)
     assert r.status_code == 201, r.text
     pid = r.json()["id"]
@@ -115,8 +117,9 @@ async def new_patient(client, headers, n: int = 1, **kw) -> dict:
 
 
 async def new_driver(client, headers, n: int = 1, **kw) -> dict:
-    r = await client.post("/drivers", headers=headers, json=driver_payload(
-        f"driver{n}@fleet.example.com", full_name=f"Driver {n}", employee_number=f"E-{n:03d}", **kw))
+    defaults = dict(email=f"driver{n}@fleet.example.com", full_name=f"Driver {n}", employee_number=f"E-{n:03d}")
+    defaults.update(kw)
+    r = await client.post("/drivers", headers=headers, json=driver_payload(**defaults))
     assert r.status_code == 201, r.text
     return {"id": r.json()["id"], "email": r.json()["email"]}
 
