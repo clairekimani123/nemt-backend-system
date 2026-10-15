@@ -54,6 +54,7 @@ from app.modules.trips.state import (
 )
 from app.modules.users.models import User
 from app.modules.vehicles.models import Vehicle
+from app.modules.realtime import publisher as rt
 
 S = TripStatus
 
@@ -414,6 +415,9 @@ async def assign_trip(db: AsyncSession, actor: User, trip_id: UUID, driver_id: U
             "previous_driver_id": str(previous[0]) if previous[0] else None,
             "warnings": [w.code for w in rep.warnings]}
     add_event(db, trip, "reassigned" if reassigned else "assigned", actor.id, from_status=before, to_status=S.ASSIGNED, meta=meta)
+        # real-time: tell dispatchers and the driver
+    driver_user_id = du.id
+    await rt.trip_assigned(trip.company_id, trip.id, driver.id, vehicle.id, driver_user_id)
     await audit.record(db, action="trip.assign", actor=actor, resource_type="trip", resource_id=trip.id, request=request, meta=meta)
     await db.commit()
     return trip
@@ -472,7 +476,8 @@ async def change_status(db: AsyncSession, actor: User, trip_id: UUID, body: Stat
         raise _err(422, "Use the assign / unassign endpoints for 'scheduled' and 'assigned'")
     apply_transition(db, trip, body.status, actor.id, body, by_driver=driver is not None)
     await audit.record(db, action="trip.status", actor=actor, resource_type="trip", resource_id=trip.id,
-                       request=request, meta={"to": body.status.value})
+    request=request, meta={"to": body.status.value})
+    await rt.trip_status_changed(trip.company_id, trip.id, body.status, trip.driver_id, trip.vehicle_id)
     await db.commit()
     return trip
 

@@ -23,6 +23,7 @@ from app.modules.users.router import router as users_router
 from app.modules.vehicles.router import router as vehicles_router
 from app.modules.routing.driver_route import router as driver_route_router
 from app.modules.routing.router import router as routing_router
+from app.modules.realtime.ws import router as realtime_router
 
 
 @asynccontextmanager
@@ -64,5 +65,5 @@ async def ready():
 
 for r in (auth_router, users_router, audit_router, platform_router, patients_router, drivers_router,
           vehicles_router, facilities_router, brokers_router, documents_router, compliance_router, trips_router, board_router, recurring_router,
-          driver_app_router,  routing_router, driver_route_router):
+          driver_app_router,  routing_router, driver_route_router, realtime_router):
     app.include_router(r)

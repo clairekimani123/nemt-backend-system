@@ -255,3 +255,28 @@ MFA, refresh rotation, lockout, audit, and RBAC behaviour.
 | `ValueError: Fernet key must be 32 url-safe base64-encoded bytes` | `FIELD_ENCRYPTION_KEYS` is malformed | Regenerate and paste into `.env` |
 | Password-reset email never arrives | `MAIL_BACKEND=memory` and no Mailpit | Set `MAIL_BACKEND=smtp` and start Mailpit |
 | `mfa_required: true` on login, no tokens | MFA is enabled on that user | Complete `POST /auth/mfa/login` |
+
+
+### One thing worth knowing: the test_trip_status_change_is_broadcast test relies on the WebSocket event being sent before the HTTP response returns. That works because the publisher runs before db.commit() in change_status — but if you ever move it after the commit, the ordering could flip. If that test becomes flaky, publish after commit and give the broadcast a tiny asyncio.sleep(0.05) before asserting. For now, the ordering is deterministic enough.
+
+## Real-time
+
+The API exposes a WebSocket at `/ws`. Two things flow over it:
+
+- **Drivers → server:** GPS pings while a trip is active. Each ping is persisted in
+  `driver_positions` (append-only), so dispatch has a location history and billing has
+  proof of service.
+- **Server → dispatchers:** every trip status change (`trip.status`), every assignment
+  (`trip.assigned`), and every driver position (`driver.position`) in their tenant.
+
+### Handshake
+
+```js
+const ws = new WebSocket("wss://api.example.com/ws");
+ws.onopen = () => ws.send(JSON.stringify({ type: "auth", token: "<access_token>" }));
+ws.onmessage = (ev) => {
+  const msg = JSON.parse(ev.data);
+  if (msg.type === "auth_ok") { /* connected */ }
+  if (msg.type === "auth_err") { /* reconnect with a fresh token */ }
+  if (msg.type === "driver.position") { /* update the map */ }
+};

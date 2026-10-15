@@ -17,6 +17,7 @@ from app.modules.trips.models import Counter, RecurringTrip, Trip, TripEvent
 from app.modules.users.models import User
 from app.modules.vehicles.models import Vehicle
 from app.modules.routing.models import Route, RoutePlan, RouteStop
+from app.modules.realtime.models import DriverPosition
 
 __all__ = [
     "AuditLog",
@@ -39,4 +40,5 @@ __all__ = [
     "Route",
     "RoutePlan",
     "RouteStop",
+    "DriverPosition",
 ]

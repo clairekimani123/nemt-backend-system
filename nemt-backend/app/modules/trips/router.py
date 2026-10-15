@@ -162,3 +162,25 @@ async def board(on_date: date, actor: User = READ, db: AsyncSession = Depends(ge
     lanes = {name: [o for o in outs if o.status in members] for name, members in LANES.items()}
     return BoardOut(on_date=on_date, counts={k: len(v) for k, v in lanes.items()},
                     late=sum(o.is_late for o in outs), lanes=lanes)
+
+
+@board_router.get("/live")
+async def live_positions(actor: User = READ, db: AsyncSession = Depends(get_db)):
+    """The last known position of every driver who has reported in the last 30 minutes."""
+    from datetime import timedelta
+    from sqlalchemy import func as _f, text as _t
+    cutoff = datetime.now(UTC) - timedelta(minutes=30)
+    # newest position per driver, tenant-scoped by RLS
+    rows = (await db.execute(_t("""
+        SELECT DISTINCT ON (driver_id) driver_id, latitude, longitude, trip_id, recorded_at
+        FROM driver_positions
+        WHERE recorded_at > :cutoff
+        ORDER BY driver_id, recorded_at DESC
+    """), {"cutoff": cutoff})).all()
+    return {
+        "positions": [
+            {"driver_id": str(r[0]), "lat": r[1], "lng": r[2],
+             "trip_id": str(r[3]) if r[3] else None, "at": r[4].isoformat()}
+            for r in rows
+        ],
+    }

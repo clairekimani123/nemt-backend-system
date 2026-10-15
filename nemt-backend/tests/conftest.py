@@ -34,11 +34,17 @@ from sqlalchemy.pool import NullPool  # noqa: E402
 import app.core.security as _security  # noqa: E402
 from app.core.config import settings  # noqa: E402
 from app.core.mail import MemoryMailer  # noqa: E402
-from app.main import app  # noqa: E402
+from app.main import app as fastapi_app  # noqa: E402
 from app.scripts.bootstrap import main as bootstrap_super_admin  # noqa: E402
 from tests.helpers import PW, login  # noqa: E402
 
+
+from fastapi.testclient import TestClient
+from tests.helpers import PW
+
+
 _security._ph = PasswordHasher(time_cost=1, memory_cost=8, parallelism=1)
+
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -60,7 +66,7 @@ async def _clean_db():
 
 @pytest_asyncio.fixture
 async def client():
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as c:
         yield c
 
 
@@ -68,3 +74,24 @@ async def client():
 async def super_token(client) -> str:
     await bootstrap_super_admin("root@platform.example.com", PW, "Root")
     return (await login(client, "platform", "root@platform.example.com"))["access_token"]
+
+
+# @pytest.fixture
+# def seeded_company(client, super_token):
+#     """Runs the async company bootstrap and returns (company_dict, super_token) for sync tests.
+#     Because the async fixtures already create the data via the async client, the sync
+#     TestClient in `app` sees the same rows."""
+#     from tests.helpers import make_company  # local import; the fixture is async
+#     import asyncio
+
+#     async def _mk():
+#         return await make_company(client, super_token, "alpha")
+
+#     # This fixture is sync, so drive the async coroutine on a fresh loop that shares
+#     # the same DB session configuration.
+#     loop = asyncio.new_event_loop()
+#     try:
+#         c = loop.run_until_complete(_mk())
+#     finally:
+#         loop.close()
+#     return c, super_token
