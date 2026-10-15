@@ -18,6 +18,7 @@ from app.modules.users.models import User
 from app.modules.vehicles.models import Vehicle
 from app.modules.routing.models import Route, RoutePlan, RouteStop
 from app.modules.realtime.models import DriverPosition
+from app.modules.notifications.models import NotificationLog, NotificationTemplate
 
 __all__ = [
     "AuditLog",
@@ -41,4 +42,6 @@ __all__ = [
     "RoutePlan",
     "RouteStop",
     "DriverPosition",
+    "NotificationLog",
+    "NotificationTemplate",
 ]
