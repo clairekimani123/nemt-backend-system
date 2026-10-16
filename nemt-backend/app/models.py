@@ -19,6 +19,7 @@ from app.modules.vehicles.models import Vehicle
 from app.modules.routing.models import Route, RoutePlan, RouteStop
 from app.modules.realtime.models import DriverPosition
 from app.modules.notifications.models import NotificationLog, NotificationTemplate
+from app.modules.billing.models import Claim, ClaimLine, ClaimPayment, RatePlan
 
 __all__ = [
     "AuditLog",
@@ -44,4 +45,8 @@ __all__ = [
     "DriverPosition",
     "NotificationLog",
     "NotificationTemplate",
+    "Claim",
+    "ClaimLine",
+    "ClaimPayment",
+    "RatePlan",
 ]
