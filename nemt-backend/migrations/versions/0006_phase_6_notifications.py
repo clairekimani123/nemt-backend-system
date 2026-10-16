@@ -76,6 +76,20 @@ def upgrade() -> None:
     grant("SELECT, INSERT", "notification_logs")     # append-only log
 
 
+        # A minimal default: "your driver is on the way" in English email.
+    # Every other template is created per-tenant from the admin UI.
+    op.execute("""
+        INSERT INTO notification_templates
+        (id, company_id, event, channel, language, subject, body, is_active, created_at, updated_at)
+        SELECT gen_random_uuid(), c.id, 'trip.en_route.patient', 'email', 'en',
+               'Your ride is on the way',
+               E'Hi {{patient_first_name}},\\n\\nYour driver is on the way to {{pickup_line1}}.\\n\\nTrip: {{trip_ref}}\\n\\nThank you.',
+               true, now(), now()
+        FROM companies c
+        WHERE c.is_platform = false
+    """)
+
+
 def downgrade() -> None:
     op.drop_index(op.f("ix_notification_logs_company_id"), table_name="notification_logs")
     op.drop_index("ix_notification_logs_recipient", table_name="notification_logs")

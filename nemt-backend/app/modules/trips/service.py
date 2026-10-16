@@ -55,6 +55,8 @@ from app.modules.trips.state import (
 from app.modules.users.models import User
 from app.modules.vehicles.models import Vehicle
 from app.modules.realtime import publisher as rt
+from app.modules.notifications.models import Channel as NotifyChannel
+from app.modules.notifications import service as notifier
 
 S = TripStatus
 
@@ -419,6 +421,19 @@ async def assign_trip(db: AsyncSession, actor: User, trip_id: UUID, driver_id: U
     driver_user_id = du.id
     await rt.trip_assigned(trip.company_id, trip.id, driver.id, vehicle.id, driver_user_id)
     await audit.record(db, action="trip.assign", actor=actor, resource_type="trip", resource_id=trip.id, request=request, meta=meta)
+        # notify the driver: "you've got a new trip"
+    await notifier.notify(
+        db, company_id=trip.company_id, event="trip.assigned.driver",
+        channel=NotifyChannel.EMAIL, to=du.email, recipient_user_id=du.id,
+        context={
+            "driver_name": du.full_name,
+            "trip_ref": f"T-{trip.trip_number:06d}",
+            "pickup_at": trip.scheduled_pickup_at.isoformat(),
+            "pickup_line1": trip.pickup_line1,
+            "dropoff_line1": trip.dropoff_line1,
+            "company_name": "Your company",   # optionally look up Company.name
+        },
+    )
     await db.commit()
     return trip
 
@@ -463,6 +478,11 @@ def apply_transition(db: AsyncSession, trip: Trip, target: TripStatus, actor_id:
     add_event(db, trip, "status_changed", actor_id, from_status=before, to_status=target, lat=body.latitude,
               lng=body.longitude, reason=body.reason_code.value if body.reason_code else None, note=body.note)
 
+    if target == S.COMPLETED:
+        # TODO: send a completion receipt to the patient or the facility. Skipped for now
+        # because we don't yet know who the "recipient" is for each trip type.
+        pass
+
 
 async def change_status(db: AsyncSession, actor: User, trip_id: UUID, body: StatusIn, request: Request, *,
                         driver: Driver | None = None) -> Trip:
@@ -478,6 +498,21 @@ async def change_status(db: AsyncSession, actor: User, trip_id: UUID, body: Stat
     await audit.record(db, action="trip.status", actor=actor, resource_type="trip", resource_id=trip.id,
     request=request, meta={"to": body.status.value})
     await rt.trip_status_changed(trip.company_id, trip.id, body.status, trip.driver_id, trip.vehicle_id)
+    if body.status == S.EN_ROUTE_TO_PICKUP and driver is not None:
+        # patient-facing SMS/email: "your ride is on the way"
+        patient = await db.get(Patient, trip.patient_id)
+
+        if patient and patient.email:
+            await notifier.notify(
+            db, company_id=trip.company_id, event="trip.en_route.patient",
+                channel=NotifyChannel.EMAIL, to=patient.email, recipient_user_id=None,
+                context={
+                    "patient_first_name": patient.first_name,
+                    "trip_ref": f"T-{trip.trip_number:06d}",
+                    "pickup_line1": trip.pickup_line1,
+                    "eta_minutes": "a few",     # the estimate service can fill this properly later
+                    },
+                )
     await db.commit()
     return trip
 

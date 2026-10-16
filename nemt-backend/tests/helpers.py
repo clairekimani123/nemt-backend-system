@@ -41,7 +41,7 @@ async def staff_headers(client, company: dict, role: str) -> dict[str, str]:
 
 
 def patient_payload(**kw) -> dict:
-    base = {"first_name": "Ada", "last_name": "Lovelace", "date_of_birth": "1950-05-17",
+    base = {"first_name": "Ada", "last_name": "Lovelace", "email": "patient@example.com", "date_of_birth": "1950-05-17",
             "medicaid_id": "AB-123456", "notes": "Oxygen concentrator; call on arrival",
             "mobility": "wheelchair_manual", "phone": "555-0100"}
     return base | kw

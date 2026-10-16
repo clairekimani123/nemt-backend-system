@@ -280,3 +280,47 @@ ws.onmessage = (ev) => {
   if (msg.type === "auth_err") { /* reconnect with a fresh token */ }
   if (msg.type === "driver.position") { /* update the map */ }
 };
+
+## Notifications
+
+Events become messages. `trip.assigned.driver`, `trip.en_route.patient`,
+`trip.reminder.patient`, `driver.manifest.daily` — each has a template per
+(company, event, channel, language) that the admin UI can edit. A template is a
+subject and body with `{{placeholder}}` syntax, no expressions, no filters.
+
+### Engine
+
+`notify(company_id=..., event=..., channel=..., to=..., context={...})` looks up the
+template, renders it, hands it to the channel, and writes a `notification_logs` row.
+Missing templates write a `skipped` row. Delivery failures write a `failed` row with
+the error; they never raise into the caller.
+
+### Channels
+
+- **email** — sends via Celery's `send_email` task (Phase 3). SMTP retries and backoff
+  are the task's responsibility, not the engine's.
+- **sms** — a placeholder until an SMS provider is chosen. Swap `NullSms` for a real
+  class in `app/modules/notifications/channels.py`; the engine never changes.
+- **push** — WebPush/VAPID placeholder.
+
+### Batch jobs (Celery beat)
+
+| Task | Schedule | What |
+|---|---|---|
+| `send_trip_reminders` | every 15 min | 2-hour reminder to patients |
+| `send_daily_driver_manifests` | 05:00 UTC | driver's day in one email |
+
+### Admin
+
+- `GET/POST/PATCH /notifications/templates` — read and edit templates
+- `GET /notifications/log` — recent sends and skips
+
+Requires `settings:write` (company_admin or super_admin).
+
+### Rules
+
+- Every message is transactional. No marketing copy.
+- Never put PHI in an email body. Patient first name, trip ref, and address line are
+  fine; date of birth, Medicaid ID, and diagnosis are not. Templates are reviewed
+  against this rule before going live.
+- The log is append-only. Every attempt is a new row.

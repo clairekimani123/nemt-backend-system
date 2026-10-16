@@ -14,3 +14,16 @@ def materialize_recurring_trips() -> dict[str, int]:
     from app.modules.trips.jobs import run_materialize_all
 
     return run_materialize_all()
+
+@celery_app.task
+def send_trip_reminders() -> dict[str, int]:
+    """Reminder to patients whose pickup is in the next 2 hours."""
+    from app.modules.notifications.jobs import run_trip_reminders
+    return run_trip_reminders()
+
+
+@celery_app.task
+def send_daily_driver_manifests() -> dict[str, int]:
+    """Each driver gets an email listing today's trips, 90 minutes before their first pickup."""
+    from app.modules.notifications.jobs import run_daily_manifests
+    return run_daily_manifests()
