@@ -6,6 +6,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.modules.billing.models import ClaimStatus, PayerType, PaymentKind
+from app.modules.billing.models import RuleKind
 
 
 # ------------------------------------------------------------------ rate plans
@@ -169,3 +170,41 @@ class AgingBucketOut(BaseModel):
     count: int
     billed_cents: int
     outstanding_cents: int
+
+
+
+class RateRuleIn(BaseModel):
+    priority: int = Field(default=0, ge=-1000, le=1000)
+    exclusive: bool = False
+    broker_id: UUID | None = None
+    procedure_code: str | None = Field(default=None, max_length=8)
+    mobility: str | None = Field(default=None, max_length=32)
+    weekday_mask: int | None = Field(default=None, ge=0, le=127)
+    kind: RuleKind
+    amount_cents: int | None = Field(default=None, ge=0)
+    multiplier_bp: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def _payload(self) -> "RateRuleIn":
+        if self.kind == RuleKind.FLAT and self.amount_cents is None:
+            raise ValueError("amount_cents is required for a flat rule")
+        if self.kind == RuleKind.MULTIPLIER and self.multiplier_bp is None:
+            raise ValueError("multiplier_bp is required for a multiplier rule")
+        return self
+
+
+class RateRuleOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    rate_plan_id: UUID
+    priority: int
+    exclusive: bool
+    broker_id: UUID | None
+    procedure_code: str | None
+    mobility: str | None
+    weekday_mask: int | None
+    kind: RuleKind
+    amount_cents: int | None
+    multiplier_bp: int | None
+    created_at: datetime
+    updated_at: datetime

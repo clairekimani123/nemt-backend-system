@@ -21,6 +21,9 @@ from app.modules.patients.models import Patient
 from app.modules.trips.models import Trip
 from app.modules.trips.service import company_tz, day_bounds
 from app.modules.users.models import User
+from app.modules.billing.models import RateRule
+from app.modules.billing.schemas import RateRuleIn, RateRuleOut
+from fastapi import HTTPException, Response
 
 router = APIRouter(prefix="/billing", tags=["billing"])
 READ = Depends(require_permission(Permission.BILLING_READ))
@@ -155,3 +158,41 @@ async def write_off(claim_id: UUID, request: Request, note: str | None = None,
 @router.get("/aging", response_model=list[AgingBucketOut])
 async def aging(actor: User = READ, db: AsyncSession = Depends(get_db)):
     return await service.aging(db, actor.company_id)
+
+
+@router.get("/rate-plans/{plan_id}/rules", response_model=list[RateRuleOut])
+async def list_rules(plan_id: UUID, actor: User = READ, db: AsyncSession = Depends(get_db)):
+    await get_or_404(db, RatePlan, plan_id, actor.company_id, "Rate plan")
+    return (await db.scalars(select(RateRule).where(
+        RateRule.company_id == actor.company_id, RateRule.rate_plan_id == plan_id)
+        .order_by(RateRule.priority.desc(), RateRule.id))).all()
+
+
+@router.post("/rate-plans/{plan_id}/rules", response_model=RateRuleOut,
+             status_code=status.HTTP_201_CREATED)
+async def create_rule(plan_id: UUID, body: RateRuleIn, request: Request,
+                      actor: User = WRITE, db: AsyncSession = Depends(get_db)):
+    await get_or_404(db, RatePlan, plan_id, actor.company_id, "Rate plan")
+    rule = RateRule(company_id=actor.company_id, rate_plan_id=plan_id, **body.model_dump())
+    db.add(rule)
+    await db.flush()
+    await audit.record(db, action="billing.rate_rule_created", actor=actor,
+                       resource_type="rate_rule", resource_id=rule.id, request=request)
+    await db.commit()
+    await db.refresh(rule)
+    return rule
+
+
+@router.delete("/rate-plans/{plan_id}/rules/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_rule(plan_id: UUID, rule_id: UUID, request: Request,
+                      actor: User = WRITE, db: AsyncSession = Depends(get_db)):
+    rule = await db.scalar(select(RateRule).where(
+        RateRule.id == rule_id, RateRule.company_id == actor.company_id,
+        RateRule.rate_plan_id == plan_id))
+    if rule is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Rule not found")
+    await db.delete(rule)
+    await audit.record(db, action="billing.rate_rule_deleted", actor=actor,
+                       resource_type="rate_rule", resource_id=rule_id, request=request)
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -20,6 +20,7 @@ from app.modules.routing.models import Route, RoutePlan, RouteStop
 from app.modules.realtime.models import DriverPosition
 from app.modules.notifications.models import NotificationLog, NotificationTemplate
 from app.modules.billing.models import Claim, ClaimLine, ClaimPayment, RatePlan
+from app.modules.billing.models import Claim, ClaimLine, ClaimPayment, RatePlan, RateRule
 
 __all__ = [
     "AuditLog",
@@ -49,4 +50,5 @@ __all__ = [
     "ClaimLine",
     "ClaimPayment",
     "RatePlan",
+    "RateRule",
 ]

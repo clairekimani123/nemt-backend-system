@@ -43,6 +43,11 @@ class PaymentKind(StrEnum):
     DENIAL = "denial"
 
 
+class RuleKind(StrEnum):
+    FLAT = "flat"                 # replace the running amount with a fixed value
+    MULTIPLIER = "multiplier"     # multiply the running amount by a basis-points factor    
+
+
 class RatePlan(IdMixin, TenantMixin, TimestampMixin, Base):
     __tablename__ = "rate_plans"
 
@@ -165,4 +170,48 @@ class ClaimLine(IdMixin, TenantMixin, Base):
                              name="fk_claim_lines_company_claim", ondelete="CASCADE"),
         CheckConstraint("line_number > 0", name="ck_claim_lines_number_positive"),
         CheckConstraint("units > 0", name="ck_claim_lines_units_positive"),
+    )
+
+
+
+class RateRule(IdMixin, TenantMixin, TimestampMixin, Base):
+    """A pricing override for a rate plan.
+
+    Rules are evaluated in descending priority order. A rule whose filters match the trip
+    is applied. A `flat` rule sets the running amount to `amount_cents`; a `multiplier`
+    rule scales it. If `exclusive` is true, matching stops after this rule.
+    """
+
+    __tablename__ = "rate_rules"
+
+    rate_plan_id: Mapped[UUID]
+    priority: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    exclusive: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+
+    # filters — all optional; a None filter is "no constraint on this dimension"
+    broker_id: Mapped[UUID | None]
+    procedure_code: Mapped[str | None] = mapped_column(String(8))
+    mobility: Mapped[str | None] = mapped_column(String(32))
+    weekday_mask: Mapped[int | None] = mapped_column(Integer)
+    # weekday_mask is a bitmask: bit 0 = Monday ... bit 6 = Sunday
+
+    kind: Mapped[RuleKind] = mapped_column(str_enum(RuleKind, "rate_rule_kind"))
+    amount_cents: Mapped[int | None] = mapped_column(Integer)
+    multiplier_bp: Mapped[int | None] = mapped_column(Integer)
+
+    __table_args__ = (
+        UniqueConstraint("company_id", "id", name="uq_rate_rules_company_id_id"),
+        ForeignKeyConstraint(["company_id", "rate_plan_id"], ["rate_plans.company_id", "rate_plans.id"],
+                             name="fk_rate_rules_company_rate_plan", ondelete="CASCADE"),
+        ForeignKeyConstraint(["company_id", "broker_id"], ["brokers.company_id", "brokers.id"],
+                             name="fk_rate_rules_company_broker"),
+        CheckConstraint("(kind = 'flat' AND amount_cents IS NOT NULL) OR "
+                        "(kind = 'multiplier' AND multiplier_bp IS NOT NULL)",
+                        name="ck_rate_rules_payload_matches_kind"),
+        CheckConstraint("amount_cents IS NULL OR amount_cents >= 0", name="ck_rate_rules_amount_positive"),
+        CheckConstraint("multiplier_bp IS NULL OR multiplier_bp >= 0",
+                        name="ck_rate_rules_multiplier_positive"),
+        CheckConstraint("weekday_mask IS NULL OR (weekday_mask BETWEEN 0 AND 127)",
+                        name="ck_rate_rules_weekday_range"),
+        Index("ix_rate_rules_plan_priority", "rate_plan_id", "priority"),
     )

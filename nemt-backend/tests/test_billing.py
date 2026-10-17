@@ -271,3 +271,7 @@ def test_compute_charge_basic_and_after_hours():
     # no-show short-circuits
     assert compute_charge_cents(plan, distance_km=5, duration_min=20,
                                 mobility="ambulatory", pickup_at=noon, no_show=True) == 2000
+
+
+
+    

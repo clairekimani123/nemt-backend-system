@@ -27,6 +27,7 @@ from app.modules.trips.models import Trip
 from app.modules.trips.state import TripStatus
 from app.modules.users.models import User
 from sqlalchemy import text as _text
+from app.modules.billing.models import RateRule, RuleKind 
 
 
 def _http(code: int, detail: object) -> HTTPException:
@@ -156,10 +157,7 @@ async def create_claim_from_trip(db: AsyncSession, actor: User, trip_id: UUID,
     if plan is None:
         raise _http(422, "No applicable rate plan; create one first or pass rate_plan_id")
 
-    charge = compute_charge_cents(
-        plan, distance_km=_distance_km(trip), duration_min=trip.estimated_duration_min,
-        mobility=trip.mobility.value, pickup_at=trip.scheduled_pickup_at,
-    )
+    charge = await compute_charge_for_trip(db, cid, trip, plan)
 
     claim = Claim(
         id=new_id(), company_id=cid, trip_id=trip.id, broker_id=trip.broker_id,
@@ -293,3 +291,59 @@ async def aging(db: AsyncSession, company_id: UUID) -> list[dict]:
         buckets[key][1] += outstanding
     return [{"bucket": k, "count": v[0], "billed_cents": v[1], "outstanding_cents": v[1]}
             for k, v in buckets.items()]
+
+
+
+def _weekday_matches(mask: int | None, d: date) -> bool:
+    """weekday_mask bit 0 = Monday. `date.weekday()` returns 0 = Monday too, so they align."""
+    if mask is None:
+        return True
+    return bool(mask & (1 << d.weekday()))
+
+
+def _rule_matches(rule: RateRule, *, broker_id: UUID | None, procedure_code: str | None,
+                  mobility: str, service_date: date) -> bool:
+    if rule.broker_id is not None and rule.broker_id != broker_id:
+        return False
+    if rule.procedure_code is not None and rule.procedure_code != procedure_code:
+        return False
+    if rule.mobility is not None and rule.mobility != mobility:
+        return False
+    return _weekday_matches(rule.weekday_mask, service_date)
+
+
+def apply_rules(cents: int, rules: list[RateRule], *, broker_id: UUID | None,
+                procedure_code: str | None, mobility: str, service_date: date) -> int:
+    """Walk rules in priority order (highest first) and apply the ones that match."""
+    ordered = sorted(rules, key=lambda r: (-r.priority, str(r.id)))
+    for rule in ordered:
+        if not _rule_matches(rule, broker_id=broker_id, procedure_code=procedure_code,
+                             mobility=mobility, service_date=service_date):
+            continue
+        if rule.kind == RuleKind.FLAT:
+            cents = rule.amount_cents or 0
+        elif rule.kind == RuleKind.MULTIPLIER:
+            cents = cents * (rule.multiplier_bp or 10_000) // 10_000
+        if rule.exclusive:
+            break
+    return max(0, cents)
+
+
+async def compute_charge_for_trip(db: AsyncSession, company_id: UUID, trip: Trip,
+                                  plan: RatePlan, procedure_code: str | None = "A0120") -> int:
+    """Full pricing pipeline: base computation + rule overrides."""
+    cents = compute_charge_cents(
+        plan,
+        distance_km=_distance_km(trip),
+        duration_min=trip.estimated_duration_min,
+        mobility=trip.mobility.value,
+        pickup_at=trip.scheduled_pickup_at,
+        no_show=False,
+        late_cancel=False,
+    )
+    rules = list((await db.scalars(select(RateRule).where(
+        RateRule.company_id == company_id, RateRule.rate_plan_id == plan.id))).all())
+    if not rules:
+        return cents
+    return apply_rules(cents, rules, broker_id=trip.broker_id, procedure_code=procedure_code,
+                       mobility=trip.mobility.value, service_date=trip.scheduled_pickup_at.date())
