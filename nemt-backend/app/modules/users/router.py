@@ -15,6 +15,9 @@ from app.modules.users.models import User
 from app.modules.users.schemas import UserCreate, UserOut, UserUpdate
 
 router = APIRouter(prefix="/users", tags=["users"])
+# These roles need a matching profile row (drivers / patients), so a plain role switch would
+# leave a login that dispatch can't use. Drivers are created via POST /drivers.
+PROFILE_ROLES = {Role.DRIVER, Role.PASSENGER}
 
 
 @router.get("/me", response_model=UserOut)
@@ -46,6 +49,8 @@ async def create_user(
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Cannot assign this role")
     if await get_user_by_email(db, actor.company_id, body.email):
         raise HTTPException(status.HTTP_409_CONFLICT, "Email already in use")
+    if body.role == Role.DRIVER:
+        raise HTTPException(422, "Create drivers with POST /drivers so they get a driver profile")
     user = User(
         company_id=actor.company_id, email=body.email, password_hash=hash_password(body.password),
         full_name=body.full_name, phone=body.phone, role=body.role,
@@ -74,6 +79,10 @@ async def update_user(
     changes = body.model_dump(exclude_unset=True)
     if changes.get("role") == Role.SUPER_ADMIN:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Cannot assign this role")
+    if "role" in changes and changes["role"] != target.role and (
+        changes["role"] in PROFILE_ROLES or target.role in PROFILE_ROLES
+    ):
+        raise HTTPException(422, "Driver and passenger accounts can't be switched to or from another role")
     if target.id == actor.id and (
         changes.get("is_active") is False or ("role" in changes and changes["role"] != actor.role)
     ):

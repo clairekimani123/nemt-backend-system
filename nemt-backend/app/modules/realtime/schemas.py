@@ -74,3 +74,20 @@ class DriverPositionEvent(BaseModel):
     lng: float
     trip_id: UUID | None
     at: datetime
+
+class TripCreatedEvent(BaseModel):
+    """A new trip exists (booked by dispatch or requested from the passenger portal)."""
+
+    type: Literal["trip.created"] = "trip.created"
+    trip_id: UUID
+    source: str
+    at: datetime
+
+
+class PatientCreatedEvent(BaseModel):
+    """A passenger registered (or dispatch added a patient). IDs only: no PHI on the bus."""
+
+    type: Literal["patient.created"] = "patient.created"
+    patient_id: UUID
+    self_registered: bool
+    at: datetime

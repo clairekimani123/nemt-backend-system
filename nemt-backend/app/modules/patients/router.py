@@ -21,6 +21,7 @@ from app.modules.patients.schemas import (
     PatientOut,
     PatientUpdate,
 )
+from app.modules.realtime import publisher as rt
 from app.modules.users.models import User
 
 router = APIRouter(prefix="/patients", tags=["patients (PHI)"])
@@ -55,6 +56,7 @@ async def create_patient(body: PatientCreate, request: Request, actor: User = WR
                        resource_id=patient.id, request=request)
     await db.commit()
     await db.refresh(patient)
+    await rt.patient_created(actor.company_id, patient.id, self_registered=False)
     return service.to_out(patient, _sensitive(actor))
 
 

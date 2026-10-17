@@ -8,7 +8,7 @@ H = lambda slug: {"X-Tenant": slug}  # noqa: E731
 
 async def _passenger(client, slug="alpha", email="sam@example.com"):
     r = await client.post("/auth/register", headers=H(slug),
-                          json={"email": email, "password": PW, "full_name": "Sam Rider"})
+                          json={"email": email, "password": PW, "full_name": "Sam Rider", "date_of_birth": "1960-02-03"})
     assert r.status_code == 201, r.text
     return r.json()
 
@@ -26,14 +26,15 @@ async def test_register_login_me(client, super_token):
 async def test_register_ignores_role_injection(client, super_token):
     await make_company(client, super_token, "alpha")
     r = await client.post("/auth/register", headers=H("alpha"), json={
-        "email": "evil@example.com", "password": PW, "full_name": "E", "role": "company_admin"})
+        "email": "evil@example.com", "password": PW, "full_name": "E", "role": "company_admin",
+        "date_of_birth": "1960-02-03"})
     assert r.status_code == 201 and r.json()["role"] == "passenger"
 
 
 async def test_weak_password_rejected(client, super_token):
     await make_company(client, super_token, "alpha")
     r = await client.post("/auth/register", headers=H("alpha"),
-                          json={"email": "a@example.com", "password": "short", "full_name": "A"})
+                          json={"email": "a@example.com", "password": "short", "full_name": "A", "date_of_birth": "1960-02-03"})
     assert r.status_code == 422
 
 

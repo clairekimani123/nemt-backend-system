@@ -91,3 +91,16 @@ async def test_security_headers_present(client):
     r = await client.get("/health")
     assert r.headers["cache-control"] == "no-store"
     assert r.headers["x-content-type-options"] == "nosniff"
+
+async def test_role_changes_keep_profiles_consistent(client, super_token):
+    a = await make_company(client, super_token, "alpha")
+    r = await client.post("/users", headers=a["admin_headers"], json={
+        "email": "drv@alpha.example.com", "password": PW, "full_name": "D", "role": "driver"})
+    assert r.status_code == 422                                  # drivers come from POST /drivers
+    disp = await make_user(client, a, "disp@alpha.example.com", "dispatcher")
+    rider = await make_user(client, a, "rider@alpha.example.com", "passenger")
+    h = a["admin_headers"]
+    assert (await client.patch(f"/users/{disp['id']}", headers=h, json={"role": "driver"})).status_code == 422
+    assert (await client.patch(f"/users/{rider['id']}", headers=h, json={"role": "dispatcher"})).status_code == 422
+    ok = await client.patch(f"/users/{disp['id']}", headers=h, json={"role": "fleet_manager"})
+    assert ok.status_code == 200 and ok.json()["role"] == "fleet_manager"

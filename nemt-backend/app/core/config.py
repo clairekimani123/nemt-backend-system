@@ -87,6 +87,17 @@ class Settings(BaseSettings):
 
     celery_always_eager: bool = False
 
+    # --- installation / reset ---
+    # Web-based first-run setup (POST /setup/super-admin) is only possible when this is set AND no
+    # super admin exists. Leave it unset to allow setup only through `python -m app.scripts.bootstrap`.
+    setup_token: SecretStr | None = None
+    # Full system reset (POST /platform/system/reset). None = allowed everywhere except env=prod.
+    allow_system_reset: bool | None = None
+
+    @property
+    def system_reset_enabled(self) -> bool:
+        return self.allow_system_reset if self.allow_system_reset is not None else self.env != "prod"
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -35,6 +35,15 @@ _SET_CTX = text(
 )
 
 
+# deadlock_detected, lock_not_available (lock_timeout), serialization_failure: the transaction was
+# rolled back because of a lock conflict, so running it again may succeed.
+LOCK_CONFLICT_SQLSTATES = {"40P01", "55P03", "40001"}
+
+
+def is_lock_conflict(exc: BaseException) -> bool:
+    return getattr(getattr(exc, "orig", None), "sqlstate", None) in LOCK_CONFLICT_SQLSTATES
+
+
 def _ctx_params(info: dict[str, Any]) -> dict[str, str]:
     tenant = info.get("tenant_id")
     return {"tenant": str(tenant) if tenant else "", "bypass": "on" if info.get("bypass") else "off"}

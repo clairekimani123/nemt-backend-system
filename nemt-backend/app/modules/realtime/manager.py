@@ -84,6 +84,19 @@ class ConnectionManager:
     async def to_user(self, company_id: UUID, user_id: UUID, message: BaseModel) -> int:
         return await self.broadcast(company_id, message, user_ids={user_id})
 
+    async def close_all(self, code: int = 4401) -> int:
+        """Disconnect every socket (used by the system reset: old sessions must not linger)."""
+        async with self._lock:
+            entries = list(self._by_user.values())
+            self._by_user.clear()
+            self._by_company.clear()
+        for ws, _, _ in entries:
+            try:
+                await ws.close(code=code)
+            except Exception:
+                pass
+        return len(entries)
+
     def stats(self) -> dict[str, Any]:
         return {"sockets": len(self._by_user), "companies": len(self._by_company)}
 

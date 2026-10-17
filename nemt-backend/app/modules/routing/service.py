@@ -119,6 +119,9 @@ async def create_plan(db: AsyncSession, actor: User, body: PlanRequest, request:
         else:
             resources.append(r)
     if not resources:
+        if skipped:  # pairs were given/found but none can drive: say why instead of a generic hint
+            reasons = ", ".join(sorted({s["reason"].replace("_", " ") for s in skipped}))
+            raise _http(422, f"No usable driver+vehicle pairs ({reasons}).")
         raise _http(422, "No usable driver+vehicle pairs. Pass `resources`, or set default drivers on your vehicles.")
     if len(resources) > MAX_RESOURCES:
         raise _http(422, f"At most {MAX_RESOURCES} vehicles per plan")

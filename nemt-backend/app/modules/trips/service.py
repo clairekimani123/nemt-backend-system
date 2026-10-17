@@ -274,7 +274,8 @@ def build_trip(*, company_id: UUID, actor_id: UUID | None, patient: Patient, pic
     return trip
 
 
-async def create_trips(db: AsyncSession, actor: User, body: TripCreate, request: Request) -> list[UUID]:
+async def create_trips(db: AsyncSession, actor: User, body: TripCreate, request: Request,
+                       source: TripSource = TripSource.DISPATCHER) -> list[UUID]:
     cid = actor.company_id
     patient = await get_or_404(db, Patient, body.patient_id, cid, "Patient")
     if patient.archived_at is not None:
@@ -295,7 +296,7 @@ async def create_trips(db: AsyncSession, actor: User, body: TripCreate, request:
 
     common = dict(company_id=cid, actor_id=actor.id, patient=patient, duration=duration, mobility=mobility,
                   escorts=escorts, oxygen=oxygen, animal=animal, instructions=body.special_instructions,
-                  broker_id=body.broker_id, auth_no=body.authorization_number, source=TripSource.DISPATCHER)
+                  broker_id=body.broker_id, auth_no=body.authorization_number, source=source)
     outbound = build_trip(**common, pickup=pickup, dropoff=dropoff, number=await next_number(db, cid, "trip"),
                           pickup_at=start, appointment_at=body.appointment_at, leg=Leg.OUTBOUND)
     trips = [outbound]
@@ -312,9 +313,11 @@ async def create_trips(db: AsyncSession, actor: User, body: TripCreate, request:
         db.add(t)
     await flush_or_409(db, "Could not save the trip")
     for t in trips:
-        add_event(db, t, "created", actor.id, to_status=S.SCHEDULED, meta={"leg": t.leg.value})
-        await audit.record(db, action="trip.create", actor=actor, resource_type="trip", resource_id=t.id, request=request)
+        add_event(db, t, "created", actor.id, to_status=S.SCHEDULED, meta={"leg": t.leg.value, "source": source.value})
+        await audit.record(db, action="trip.create", actor=actor, resource_type="trip", resource_id=t.id, request=request,
+                           meta={"source": source.value})
     await db.commit()
+    await rt.trip_created(cid, [t.id for t in trips], source.value)
     return [t.id for t in trips]
 
 

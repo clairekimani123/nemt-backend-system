@@ -36,7 +36,8 @@ async def test_same_email_can_exist_in_two_tenants(client, super_token):
     await _two_tenants(client, super_token)
     for slug, pw in (("alpha", "alpha-password-1"), ("bravo", "bravo-password-2")):
         r = await client.post("/auth/register", headers={"X-Tenant": slug},
-                              json={"email": "sam@example.com", "password": pw, "full_name": "Sam"})
+                              json={"email": "sam@example.com", "password": pw, "full_name": "Sam",
+                                    "date_of_birth": "1960-02-03"})
         assert r.status_code == 201
     # credentials are tenant-specific
     r = await client.post("/auth/login", headers={"X-Tenant": "bravo"},

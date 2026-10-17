@@ -8,6 +8,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.address import apply_address
 from app.core.base import new_id
 from app.core.config import settings
 from app.core.db import open_tenant_session
@@ -29,6 +30,8 @@ from app.core.security import (
 from app.modules.audit import service as audit
 from app.modules.auth.models import PasswordResetToken, RefreshToken
 from app.modules.auth.schemas import RegisterIn, TokenOut
+from app.modules.patients import service as patient_service
+from app.modules.patients.models import AssistanceLevel, Patient, PatientAddress
 from app.modules.users.models import User
 
 log = logging.getLogger(__name__)
@@ -57,9 +60,15 @@ def parse_scoped_token(raw: str) -> UUID:
 
 
 # ---- registration -----------------------------------------------------------------
+def split_name(full_name: str) -> tuple[str, str]:
+    first, _, last = full_name.strip().rpartition(" ")
+    return (first, last) if first else (last, "")
+
+
 async def register_passenger(
     db: AsyncSession, company_id: UUID, data: RegisterIn, request: Request
-) -> User:
+) -> tuple[User, Patient]:
+    """Login + passenger profile in ONE transaction: either both exist or neither does."""
     if await get_user_by_email(db, company_id, data.email):
         raise HTTPException(status.HTTP_409_CONFLICT, "Email already registered")
     user = User(
@@ -72,9 +81,23 @@ async def register_passenger(
     except IntegrityError:
         await db.rollback()
         raise HTTPException(status.HTTP_409_CONFLICT, "Email already registered") from None
-    await audit.record(db, action="auth.register", actor=user, request=request)
+    first, last = split_name(data.full_name)
+    patient = Patient(company_id=company_id, user_id=user.id)
+    patient_service.apply_fields(patient, {
+        "first_name": first[:100], "last_name": last[:100], "date_of_birth": data.date_of_birth,
+        "phone": data.phone, "email": data.email, "mobility": data.mobility,
+        "assistance_level": AssistanceLevel.DOOR_TO_DOOR,
+    })
+    db.add(patient)
+    await db.flush()
+    if data.home_address:
+        addr = PatientAddress(company_id=company_id, patient_id=patient.id, label="home", is_primary=True)
+        await apply_address(addr, data.home_address)
+        db.add(addr)
+    await audit.record(db, action="auth.register", actor=user, request=request,
+                       resource_type="patient", resource_id=patient.id)
     await db.commit()
-    return user
+    return user, patient
 
 
 # ---- login ----------------------------------------------------------------------------
