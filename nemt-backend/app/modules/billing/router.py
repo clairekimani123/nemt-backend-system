@@ -24,6 +24,9 @@ from app.modules.users.models import User
 from app.modules.billing.models import RateRule
 from app.modules.billing.schemas import RateRuleIn, RateRuleOut
 from fastapi import HTTPException, Response
+from app.modules.billing.schemas import (
+    BatchOut, BatchPaymentIn, BatchSubmitIn, BatchItemOutcome, FromTripsIn,
+)
 
 router = APIRouter(prefix="/billing", tags=["billing"])
 READ = Depends(require_permission(Permission.BILLING_READ))
@@ -196,3 +199,37 @@ async def delete_rule(plan_id: UUID, rule_id: UUID, request: Request,
                        resource_type="rate_rule", resource_id=rule_id, request=request)
     await db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/claims/from-trips", response_model=BatchOut, status_code=status.HTTP_200_OK)
+async def create_claims_from_trips(body: FromTripsIn, request: Request,
+                                   actor: User = WRITE, db: AsyncSession = Depends(get_db)):
+    """Batch turn completed trips into draft claims. Reports per-item outcomes."""
+    raw = await service.create_claims_from_trips(db, actor, body.trip_ids, body.payer_type,
+                                                 body.rate_plan_id, request)
+    outcomes = [BatchItemOutcome(**r) for r in raw]
+    succeeded = sum(1 for o in outcomes if o.ok)
+    return BatchOut(requested=len(outcomes), succeeded=succeeded,
+                    failed=len(outcomes) - succeeded, outcomes=outcomes)
+
+
+@router.post("/claims/batch-submit", response_model=BatchOut)
+async def batch_submit(body: BatchSubmitIn, request: Request,
+                       actor: User = WRITE, db: AsyncSession = Depends(get_db)):
+    raw = await service.submit_claims_batch(db, actor, body.claim_ids, body.reference, request)
+    outcomes = [BatchItemOutcome(**r) for r in raw]
+    succeeded = sum(1 for o in outcomes if o.ok)
+    return BatchOut(requested=len(outcomes), succeeded=succeeded,
+                    failed=len(outcomes) - succeeded, outcomes=outcomes)
+
+
+@router.post("/claims/batch-pay", response_model=BatchOut)
+async def batch_pay(body: BatchPaymentIn, request: Request,
+                    actor: User = WRITE, db: AsyncSession = Depends(get_db)):
+    raw = await service.post_payment_batch(db, actor, body.claim_ids, body.kind,
+                                           body.amount_cents, body.reference, body.note,
+                                           body.denial_code, request)
+    outcomes = [BatchItemOutcome(**r) for r in raw]
+    succeeded = sum(1 for o in outcomes if o.ok)
+    return BatchOut(requested=len(outcomes), succeeded=succeeded,
+                    failed=len(outcomes) - succeeded, outcomes=outcomes)

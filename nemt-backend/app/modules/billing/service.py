@@ -347,3 +347,160 @@ async def compute_charge_for_trip(db: AsyncSession, company_id: UUID, trip: Trip
         return cents
     return apply_rules(cents, rules, broker_id=trip.broker_id, procedure_code=procedure_code,
                        mobility=trip.mobility.value, service_date=trip.scheduled_pickup_at.date())
+
+
+ # ------------------------------------------------------------------ batch operations
+async def create_claims_from_trips(db: AsyncSession, actor: User, trip_ids: list[UUID],
+                                   payer_type: PayerType, rate_plan_id: UUID | None,
+                                   request: Request) -> list[dict]:
+    """Create claims for each trip. Never aborts the batch on a single failure.
+
+    Returns one dict per input (in input order) with shape:
+        {"index": int, "ok": bool, "id": UUID | None, "error": str | None}
+
+    The whole batch is committed at the end — partial successes inside one call are still
+    persisted, because the operator asked for all of them and expects at least the ones
+    that could succeed to stick.
+    """
+    outcomes: list[dict] = []
+    for i, trip_id in enumerate(trip_ids):
+        try:
+            claim = await _create_one_claim_no_commit(db, actor, trip_id, payer_type,
+                                                      rate_plan_id, request)
+            outcomes.append({"index": i, "ok": True, "id": claim.id, "error": None})
+        except HTTPException as exc:
+            # roll the failed item back to the savepoint so the session stays usable
+            await db.rollback()
+            outcomes.append({"index": i, "ok": False, "id": None,
+                             "error": _flatten_http_detail(exc.detail)})
+        except Exception as exc:
+            await db.rollback()
+            outcomes.append({"index": i, "ok": False, "id": None, "error": str(exc)[:300]})
+    await db.commit()
+    return outcomes
+
+
+def _flatten_http_detail(detail: object) -> str:
+    if isinstance(detail, str):
+        return detail
+    if isinstance(detail, dict):
+        return detail.get("message") or str(detail)
+    return str(detail)
+
+
+async def _create_one_claim_no_commit(db: AsyncSession, actor: User, trip_id: UUID,
+                                      payer_type: PayerType, rate_plan_id: UUID | None,
+                                      request: Request) -> Claim:
+    """Same body as `create_claim_from_trip`, minus the `db.commit()` and `db.refresh()`.
+
+    Keeping the pricing and claim-creation logic in one place means the batch and the
+    single-trip endpoint can never drift apart.
+    """
+    cid = actor.company_id
+    trip = await db.scalar(select(Trip).where(Trip.id == trip_id, Trip.company_id == cid)
+                           .with_for_update())
+    if trip is None:
+        raise _http(404, "Trip not found")
+    if trip.status != TripStatus.COMPLETED:
+        raise _http(409, f"Trip {trip.trip_number} is not completed")
+    existing = await db.scalar(select(Claim).where(Claim.company_id == cid, Claim.trip_id == trip.id))
+    if existing is not None:
+        raise _http(409, f"Trip {trip.trip_number} already billed as {existing.claim_number}")
+    service_date = trip.scheduled_pickup_at.date()
+    plan = await resolve_rate_plan(db, cid, trip.broker_id, service_date, rate_plan_id)
+    if plan is None:
+        raise _http(422, "No applicable rate plan for this trip")
+    charge = await compute_charge_for_trip(db, cid, trip, plan)
+    claim = Claim(
+        id=new_id(), company_id=cid, trip_id=trip.id, broker_id=trip.broker_id,
+        rate_plan_id=plan.id, claim_number=await _next_claim_number(db, cid),
+        status=ClaimStatus.DRAFT, payer_type=payer_type, service_date=service_date,
+        billed_cents=charge,
+    )
+    db.add(claim)
+    await db.flush()
+    db.add(ClaimLine(
+        id=new_id(), company_id=cid, claim_id=claim.id, line_number=1,
+        service_date=service_date, procedure_code="A0120", units=1, charge_cents=charge,
+    ))
+    await audit.record(db, action="billing.claim_created", actor=actor, resource_type="claim",
+                       resource_id=claim.id, request=request,
+                       meta={"trip_id": str(trip.id), "billed_cents": charge})
+    return claim
+
+
+async def submit_claims_batch(db: AsyncSession, actor: User, claim_ids: list[UUID],
+                              reference: str | None, request: Request) -> list[dict]:
+    outcomes: list[dict] = []
+    now = datetime.now(UTC)
+    for i, cid in enumerate(claim_ids):
+        try:
+            claim = await db.scalar(select(Claim).where(Claim.id == cid,
+                                                        Claim.company_id == actor.company_id)
+                                    .with_for_update())
+            if claim is None:
+                raise _http(404, "Claim not found")
+            if claim.status != ClaimStatus.DRAFT:
+                raise _http(409, f"Claim {claim.claim_number} is {claim.status.value}")
+            claim.status = ClaimStatus.SUBMITTED
+            claim.submitted_at = now
+            await audit.record(db, action="billing.claim_submitted", actor=actor,
+                               resource_type="claim", resource_id=claim.id, request=request,
+                               meta={"reference": reference, "batch": True})
+            outcomes.append({"index": i, "ok": True, "id": claim.id, "error": None})
+        except HTTPException as exc:
+            await db.rollback()
+            outcomes.append({"index": i, "ok": False, "id": None,
+                             "error": _flatten_http_detail(exc.detail)})
+        except Exception as exc:
+            await db.rollback()
+            outcomes.append({"index": i, "ok": False, "id": None, "error": str(exc)[:300]})
+    await db.commit()
+    return outcomes
+
+
+async def post_payment_batch(db: AsyncSession, actor: User, claim_ids: list[UUID],
+                             kind: PaymentKind, amount_cents: int, reference: str | None,
+                             note: str | None, denial_code: str | None,
+                             request: Request) -> list[dict]:
+    outcomes: list[dict] = []
+    for i, cid in enumerate(claim_ids):
+        try:
+            claim = await db.scalar(select(Claim).where(Claim.id == cid,
+                                                        Claim.company_id == actor.company_id)
+                                    .with_for_update())
+            if claim is None:
+                raise _http(404, "Claim not found")
+            if claim.status in (ClaimStatus.VOID, ClaimStatus.WRITTEN_OFF):
+                raise _http(409, f"Claim {claim.claim_number} is {claim.status.value}")
+            db.add(ClaimPayment(
+                company_id=claim.company_id, claim_id=claim.id, kind=kind,
+                amount_cents=amount_cents, reference=reference, note=note,
+            ))
+            if kind == PaymentKind.PAYMENT:
+                claim.paid_cents += amount_cents
+                if claim.paid_cents >= claim.billed_cents:
+                    claim.status = ClaimStatus.PAID
+                    claim.resolved_at = datetime.now(UTC)
+                else:
+                    claim.status = ClaimStatus.PARTIAL
+            elif kind == PaymentKind.ADJUSTMENT:
+                claim.allowed_cents = max(0, claim.billed_cents + amount_cents)
+            elif kind == PaymentKind.DENIAL:
+                claim.status = ClaimStatus.DENIED
+                claim.denial_code = denial_code
+                claim.denial_note = note
+                claim.resolved_at = datetime.now(UTC)
+            await audit.record(db, action="billing.payment_posted", actor=actor,
+                               resource_type="claim", resource_id=claim.id, request=request,
+                               meta={"kind": kind.value, "amount_cents": amount_cents, "batch": True})
+            outcomes.append({"index": i, "ok": True, "id": claim.id, "error": None})
+        except HTTPException as exc:
+            await db.rollback()
+            outcomes.append({"index": i, "ok": False, "id": None,
+                             "error": _flatten_http_detail(exc.detail)})
+        except Exception as exc:
+            await db.rollback()
+            outcomes.append({"index": i, "ok": False, "id": None, "error": str(exc)[:300]})
+    await db.commit()
+    return outcomes                      

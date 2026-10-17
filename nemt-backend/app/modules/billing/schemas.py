@@ -208,3 +208,49 @@ class RateRuleOut(BaseModel):
     multiplier_bp: int | None
     created_at: datetime
     updated_at: datetime
+
+
+class BatchItemOutcome(BaseModel):
+    """Per-item result. `ok=false` carries a reason; `ok=true` carries the resource id."""
+
+    index: int                      # position in the request list (0-based)
+    ok: bool
+    id: UUID | None = None
+    error: str | None = None
+
+
+class BatchOut(BaseModel):
+    requested: int
+    succeeded: int
+    failed: int
+    outcomes: list[BatchItemOutcome]
+
+
+class FromTripsIn(BaseModel):
+    trip_ids: list[UUID] = Field(min_length=1, max_length=200)
+    payer_type: PayerType
+    rate_plan_id: UUID | None = None
+
+
+class BatchSubmitIn(BaseModel):
+    claim_ids: list[UUID] = Field(min_length=1, max_length=200)
+    reference: str | None = Field(default=None, max_length=64)
+
+
+class BatchPaymentIn(BaseModel):
+    claim_ids: list[UUID] = Field(min_length=1, max_length=200)
+    kind: PaymentKind
+    amount_cents: int
+    reference: str | None = Field(default=None, max_length=64)
+    note: str | None = Field(default=None, max_length=500)
+    denial_code: str | None = Field(default=None, max_length=16)
+
+    @model_validator(mode="after")
+    def _sign(self) -> "BatchPaymentIn":
+        if self.kind == PaymentKind.PAYMENT and self.amount_cents <= 0:
+            raise ValueError("payment amount must be positive")
+        if self.kind in (PaymentKind.ADJUSTMENT, PaymentKind.DENIAL) and self.amount_cents > 0:
+            raise ValueError("adjustment / denial amounts must be zero or negative")
+        if self.kind == PaymentKind.DENIAL and not self.denial_code:
+            raise ValueError("denial_code is required for a denial")
+        return self   

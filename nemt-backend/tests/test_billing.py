@@ -274,4 +274,117 @@ def test_compute_charge_basic_and_after_hours():
 
 
 
-    
+# ------------------------------------------------------------------ batch operations
+async def test_batch_create_from_trips(client, super_token):
+    c, h, _, w = await _completed_trip(client, super_token)
+    # create two more completed trips
+    t2 = await new_trip(client, h, w["patient"], w["facility_id"], at(4))
+    t3 = await new_trip(client, h, w["patient"], w["facility_id"], at(5))
+    await assign(client, h, t2["id"], w["driver"]["id"], w["vehicle_id"])
+    await assign(client, h, t3["id"], w["driver"]["id"], w["vehicle_id"])
+    drv = bearer((await login(client, "alpha", w["driver"]["email"]))["access_token"])
+    for t in (t2, t3):
+        for s in ("en_route_to_pickup", "arrived_at_pickup", "passenger_on_board",
+                  "en_route_to_dropoff", "arrived_at_dropoff", "completed"):
+            r = await client.post(f"/driver/trips/{t['id']}/status", headers=drv,
+                                  json={"status": s, "latitude": 38.9, "longitude": -77.0})
+            assert r.status_code == 200, r.text
+    # rate plan
+    await client.post("/billing/rate-plans", headers=h, json={
+        "name": "Std", "is_default": True, "effective_from": "2020-01-01",
+        "base_fare_cents": 1000})
+
+    # find all three completed trips
+    billable = (await client.get("/billing/billable-trips", headers=h)).json()
+    trip_ids = [b["trip_id"] for b in billable]
+    assert len(trip_ids) == 3
+
+    r = await client.post("/billing/claims/from-trips", headers=h, json={
+        "trip_ids": trip_ids, "payer_type": "medicaid"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["requested"] == 3 and body["succeeded"] == 3 and body["failed"] == 0
+    assert all(o["ok"] for o in body["outcomes"])
+    assert all(o["id"] for o in body["outcomes"])
+
+
+async def test_batch_create_reports_partial_failures(client, super_token):
+    c, h, trip, _ = await _completed_trip(client, super_token)
+    await client.post("/billing/rate-plans", headers=h, json={
+        "name": "Std", "is_default": True, "effective_from": "2020-01-01",
+        "base_fare_cents": 500})
+    # bill the trip once, single
+    first = (await client.post(f"/billing/claims/from-trip/{trip['id']}", headers=h,
+                               json={"payer_type": "medicaid"})).json()
+    # then try to bill it again in a batch of 1
+    r = await client.post("/billing/claims/from-trips", headers=h, json={
+        "trip_ids": [trip["id"]], "payer_type": "medicaid"})
+    body = r.json()
+    assert body["requested"] == 1 and body["succeeded"] == 0 and body["failed"] == 1
+    assert "already billed" in body["outcomes"][0]["error"].lower()
+
+
+async def test_batch_submit(client, super_token):
+    c, h, trip, w = await _completed_trip(client, super_token)
+    await client.post("/billing/rate-plans", headers=h, json={
+        "name": "Std", "is_default": True, "effective_from": "2020-01-01",
+        "base_fare_cents": 1000})
+    t2 = await new_trip(client, h, w["patient"], w["facility_id"], at(4))
+    await assign(client, h, t2["id"], w["driver"]["id"], w["vehicle_id"])
+    drv = bearer((await login(client, "alpha", w["driver"]["email"]))["access_token"])
+    for s in ("en_route_to_pickup", "arrived_at_pickup", "passenger_on_board",
+              "en_route_to_dropoff", "arrived_at_dropoff", "completed"):
+        await client.post(f"/driver/trips/{t2['id']}/status", headers=drv,
+                          json={"status": s, "latitude": 38.9, "longitude": -77.0})
+    billable = (await client.get("/billing/billable-trips", headers=h)).json()
+    ids = [b["trip_id"] for b in billable]
+    claim_ids = []
+    for tid in ids:
+        r = await client.post(f"/billing/claims/from-trip/{tid}", headers=h,
+                              json={"payer_type": "medicaid"})
+        claim_ids.append(r.json()["id"])
+
+    r = await client.post("/billing/claims/batch-submit", headers=h, json={
+        "claim_ids": claim_ids, "reference": "BATCH-01"})
+    body = r.json()
+    assert body["succeeded"] == 2
+    # submit again: both already submitted
+    r = await client.post("/billing/claims/batch-submit", headers=h, json={
+        "claim_ids": claim_ids, "reference": "BATCH-02"})
+    body = r.json()
+    assert body["succeeded"] == 0 and body["failed"] == 2
+
+
+async def test_batch_pay(client, super_token):
+    c, h, trip, _ = await _completed_trip(client, super_token)
+    await client.post("/billing/rate-plans", headers=h, json={
+        "name": "Std", "is_default": True, "effective_from": "2020-01-01",
+        "base_fare_cents": 1000})
+    claim = (await client.post(f"/billing/claims/from-trip/{trip['id']}", headers=h,
+                               json={"payer_type": "medicaid"})).json()
+    await client.post(f"/billing/claims/{claim['id']}/submit", headers=h, json={})
+    r = await client.post("/billing/claims/batch-pay", headers=h, json={
+        "claim_ids": [claim["id"]], "kind": "payment", "amount_cents": 1000,
+        "reference": "ERA-1"})
+    body = r.json()
+    assert body["succeeded"] == 1
+    detail = (await client.get(f"/billing/claims/{claim['id']}", headers=h)).json()
+    assert detail["status"] == "paid"
+
+
+async def test_batch_validation(client, super_token):
+    c, h, _, _ = await _completed_trip(client, super_token)
+    # empty list is rejected at the schema level
+    r = await client.post("/billing/claims/from-trips", headers=h, json={
+        "trip_ids": [], "payer_type": "medicaid"})
+    assert r.status_code == 422
+    # too many
+    r = await client.post("/billing/claims/from-trips", headers=h, json={
+        "trip_ids": ["00000000-0000-0000-0000-000000000000"] * 201,
+        "payer_type": "medicaid"})
+    assert r.status_code == 422
+    # batch-pay denial without denial_code
+    r = await client.post("/billing/claims/batch-pay", headers=h, json={
+        "claim_ids": ["00000000-0000-0000-0000-000000000000"],
+        "kind": "denial", "amount_cents": 0})
+    assert r.status_code == 422   
