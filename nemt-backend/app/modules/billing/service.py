@@ -503,4 +503,118 @@ async def post_payment_batch(db: AsyncSession, actor: User, claim_ids: list[UUID
             await db.rollback()
             outcomes.append({"index": i, "ok": False, "id": None, "error": str(exc)[:300]})
     await db.commit()
-    return outcomes                      
+    return outcomes 
+
+
+# ------------------------------------------------------------------ reports
+async def summary_report(db: AsyncSession, company_id: UUID, from_date: date, to_date: date) -> dict:
+    """Aggregate revenue metrics for a date range, grouped by service_date.
+
+    `from_date` and `to_date` are inclusive. Denial rate is basis points so it can be
+    compared and stored without rounding surprises (0.005 == 50 bp).
+    """
+    # All claims in range
+    claims = list((await db.scalars(select(Claim).where(
+        Claim.company_id == company_id,
+        Claim.service_date >= from_date, Claim.service_date <= to_date))).all())
+
+    # By payer
+    by_payer: dict[str, dict] = {}
+    for c in claims:
+        key = c.payer_type.value
+        agg = by_payer.setdefault(key, {
+            "payer_type": c.payer_type, "claim_count": 0, "billed_cents": 0,
+            "paid_cents": 0, "outstanding_cents": 0, "denial_count": 0,
+        })
+        agg["claim_count"] += 1
+        agg["billed_cents"] += c.billed_cents
+        agg["paid_cents"] += c.paid_cents
+        agg["outstanding_cents"] += max(0, c.billed_cents - c.paid_cents)
+        if c.status == ClaimStatus.DENIED:
+            agg["denial_count"] += 1
+
+    # Broker totals (top 10 by billed)
+    broker_totals: dict[UUID, dict] = {}
+    for c in claims:
+        if c.broker_id is None:
+            continue
+        agg = broker_totals.setdefault(c.broker_id, {"claim_count": 0, "billed_cents": 0, "paid_cents": 0})
+        agg["claim_count"] += 1
+        agg["billed_cents"] += c.billed_cents
+        agg["paid_cents"] += c.paid_cents
+    broker_rows = []
+    if broker_totals:
+        from app.modules.facilities.models import Broker
+        broker_names = {b.id: b.name for b in (await db.scalars(
+            select(Broker).where(Broker.company_id == company_id,
+                                 Broker.id.in_(list(broker_totals.keys()))))).all()}
+        for bid, agg in broker_totals.items():
+            broker_rows.append({
+                "broker_id": bid, "broker_name": broker_names.get(bid, "(unknown)"),
+                "claim_count": agg["claim_count"], "billed_cents": agg["billed_cents"],
+                "paid_cents": agg["paid_cents"],
+            })
+        broker_rows.sort(key=lambda r: (-r["billed_cents"], str(r["broker_id"])))
+        broker_rows = broker_rows[:10]
+
+    # Averages
+    total_billed = sum(c.billed_cents for c in claims)
+    total_paid = sum(c.paid_cents for c in claims)
+    total_outstanding = sum(max(0, c.billed_cents - c.paid_cents) for c in claims)
+    denied = sum(1 for c in claims if c.status == ClaimStatus.DENIED)
+    denial_rate_bp = (denied * 10_000 // len(claims)) if claims else 0
+
+    resolved = [c for c in claims if c.submitted_at and c.resolved_at
+                and c.status in (ClaimStatus.PAID, ClaimStatus.PARTIAL)]
+    avg_days_to_payment = (
+        round(sum((c.resolved_at - c.submitted_at).total_seconds() / 86400 for c in resolved) / len(resolved), 1)
+        if resolved else None
+    )
+
+    return {
+        "from_date": from_date, "to_date": to_date,
+        "claim_count": len(claims),
+        "billed_cents": total_billed,
+        "paid_cents": total_paid,
+        "outstanding_cents": total_outstanding,
+        "denied_count": denied,
+        "denial_rate_bp": denial_rate_bp,
+        "avg_days_to_payment": avg_days_to_payment,
+        "by_payer": list(by_payer.values()),
+        "top_brokers": broker_rows,
+    }
+
+
+def claims_to_csv(claims: list[Claim]) -> str:
+    """Render claims as CSV. Pure function so it can be tested without a DB."""
+    import csv
+    import io
+
+    buf = io.StringIO()
+    w = csv.writer(buf, quoting=csv.QUOTE_MINIMAL, lineterminator="\n")
+    w.writerow([
+        "claim_number", "service_date", "status", "payer_type",
+        "trip_id", "broker_id", "procedure_code", "diagnosis_code",
+        "billed_cents", "allowed_cents", "paid_cents", "patient_responsibility_cents",
+        "submitted_at", "resolved_at", "denial_code", "denial_note",
+    ])
+    for c in claims:
+        w.writerow([
+            c.claim_number,
+            c.service_date.isoformat(),
+            c.status.value,
+            c.payer_type.value,
+            str(c.trip_id) if c.trip_id else "",
+            str(c.broker_id) if c.broker_id else "",
+            c.procedure_code or "",
+            c.diagnosis_code or "",
+            c.billed_cents,
+            c.allowed_cents if c.allowed_cents is not None else "",
+            c.paid_cents,
+            c.patient_responsibility_cents,
+            c.submitted_at.isoformat() if c.submitted_at else "",
+            c.resolved_at.isoformat() if c.resolved_at else "",
+            c.denial_code or "",
+            (c.denial_note or "").replace("\n", " ").replace("\r", ""),
+        ])
+    return buf.getvalue()

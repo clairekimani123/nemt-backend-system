@@ -27,6 +27,10 @@ from fastapi import HTTPException, Response
 from app.modules.billing.schemas import (
     BatchOut, BatchPaymentIn, BatchSubmitIn, BatchItemOutcome, FromTripsIn,
 )
+from fastapi import Query
+from fastapi.responses import PlainTextResponse
+
+from app.modules.billing.schemas import SummaryOut
 
 router = APIRouter(prefix="/billing", tags=["billing"])
 READ = Depends(require_permission(Permission.BILLING_READ))
@@ -233,3 +237,43 @@ async def batch_pay(body: BatchPaymentIn, request: Request,
     succeeded = sum(1 for o in outcomes if o.ok)
     return BatchOut(requested=len(outcomes), succeeded=succeeded,
                     failed=len(outcomes) - succeeded, outcomes=outcomes)
+
+
+@router.get("/reports/summary", response_model=SummaryOut)
+async def reports_summary(
+    from_date: date = Query(..., alias="from"),
+    to_date: date = Query(..., alias="to"),
+    actor: User = READ,
+    db: AsyncSession = Depends(get_db),
+):
+    """Revenue, denial rate, DSO, and top brokers for a date range.
+
+    `from` and `to` are inclusive. If `to < from`, you get a 422 from Pydantic.
+    """
+    if to_date < from_date:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "'to' must be on or after 'from'")
+    data = await service.summary_report(db, actor.company_id, from_date, to_date)
+    return data
+
+
+@router.get("/claims.csv")
+async def claims_csv(
+    from_date: date = Query(..., alias="from"),
+    to_date: date = Query(..., alias="to"),
+    actor: User = READ,
+    db: AsyncSession = Depends(get_db),
+):
+    """CSV export for the given date range, suitable for Excel or a bookkeeper."""
+    if to_date < from_date:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "'to' must be on or after 'from'")
+    claims = list((await db.scalars(select(Claim).where(
+        Claim.company_id == actor.company_id,
+        Claim.service_date >= from_date, Claim.service_date <= to_date,
+    ).order_by(Claim.service_date, Claim.claim_number))).all())
+    csv_body = service.claims_to_csv(claims)
+    fname = f"claims_{from_date.isoformat()}_{to_date.isoformat()}.csv"
+    return PlainTextResponse(
+        csv_body,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )

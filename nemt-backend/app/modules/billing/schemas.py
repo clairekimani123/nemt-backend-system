@@ -254,3 +254,33 @@ class BatchPaymentIn(BaseModel):
         if self.kind == PaymentKind.DENIAL and not self.denial_code:
             raise ValueError("denial_code is required for a denial")
         return self   
+
+class PayerBreakdownOut(BaseModel):
+    payer_type: PayerType
+    claim_count: int
+    billed_cents: int
+    paid_cents: int
+    outstanding_cents: int
+    denial_count: int
+
+
+class BrokerBreakdownOut(BaseModel):
+    broker_id: UUID
+    broker_name: str
+    claim_count: int
+    billed_cents: int
+    paid_cents: int
+
+
+class SummaryOut(BaseModel):
+    from_date: date
+    to_date: date
+    claim_count: int
+    billed_cents: int
+    paid_cents: int
+    outstanding_cents: int
+    denied_count: int
+    denial_rate_bp: int                      # basis points, 0-10000
+    avg_days_to_payment: float | None        # None when no claim has paid yet
+    by_payer: list[PayerBreakdownOut]
+    top_brokers: list[BrokerBreakdownOut]    # up to 10, ordered by billed_cents desc    

@@ -387,4 +387,122 @@ async def test_batch_validation(client, super_token):
     r = await client.post("/billing/claims/batch-pay", headers=h, json={
         "claim_ids": ["00000000-0000-0000-0000-000000000000"],
         "kind": "denial", "amount_cents": 0})
-    assert r.status_code == 422   
+    assert r.status_code == 422
+
+
+# ------------------------------------------------------------------ reports
+async def test_summary_empty_range(client, super_token):
+    c, h, _, _ = await _completed_trip(client, super_token)
+    r = await client.get("/billing/reports/summary", headers=h,
+                         params={"from": "2020-01-01", "to": "2020-01-31"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["claim_count"] == 0
+    assert body["billed_cents"] == 0
+    assert body["denial_rate_bp"] == 0
+    assert body["avg_days_to_payment"] is None
+    assert body["by_payer"] == []
+    assert body["top_brokers"] == []
+
+async def test_summary_aggregates_by_payer_and_status(client, super_token):
+    c, h, trip, w = await _completed_trip(client, super_token)
+    await client.post("/billing/rate-plans", headers=h, json={
+        "name": "Std", "is_default": True, "effective_from": "2020-01-01",
+        "base_fare_cents": 1000})
+    # one paid medicaid claim
+    claim1 = (await client.post(f"/billing/claims/from-trip/{trip['id']}", headers=h,
+                                json={"payer_type": "medicaid"})).json()
+    await client.post(f"/billing/claims/{claim1['id']}/submit", headers=h, json={})
+    await client.post(f"/billing/claims/{claim1['id']}/payments", headers=h, json={
+        "kind": "payment", "amount_cents": 1000})
+    # one denied medicaid claim on a second trip ON THE SAME DAY
+    t2 = await new_trip(client, h, w["patient"], w["facility_id"], at(3, 16))
+    await assign(client, h, t2["id"], w["driver"]["id"], w["vehicle_id"])
+    drv = bearer((await login(client, "alpha", w["driver"]["email"]))["access_token"])
+    for s in ("en_route_to_pickup", "arrived_at_pickup", "passenger_on_board",
+              "en_route_to_dropoff", "arrived_at_dropoff", "completed"):
+        await client.post(f"/driver/trips/{t2['id']}/status", headers=drv,
+                          json={"status": s, "latitude": 38.9, "longitude": -77.0})
+    claim2 = (await client.post(f"/billing/claims/from-trip/{t2['id']}", headers=h,
+                                json={"payer_type": "medicaid"})).json()
+    await client.post(f"/billing/claims/{claim2['id']}/submit", headers=h, json={})
+    await client.post(f"/billing/claims/{claim2['id']}/payments", headers=h, json={
+        "kind": "denial", "amount_cents": 0, "denial_code": "27"})
+
+    service_date = at(3).date().isoformat()
+    r = await client.get("/billing/reports/summary", headers=h,
+                         params={"from": service_date, "to": service_date})
+    body = r.json()
+    assert body["claim_count"] == 2
+    assert body["billed_cents"] == 2000
+    assert body["paid_cents"] == 1000
+    assert body["outstanding_cents"] == 1000
+    assert body["denied_count"] == 1
+    assert body["denial_rate_bp"] == 5000       # 1 of 2 = 50% = 5000 bp
+    assert body["avg_days_to_payment"] is not None and body["avg_days_to_payment"] < 1
+    by_payer = {p["payer_type"]: p for p in body["by_payer"]}
+    assert "medicaid" in by_payer
+    assert by_payer["medicaid"]["claim_count"] == 2
+    assert by_payer["medicaid"]["denial_count"] == 1
+
+async def test_summary_rejects_bad_range(client, super_token):
+    c, h, _, _ = await _completed_trip(client, super_token)
+    r = await client.get("/billing/reports/summary", headers=h,
+                         params={"from": "2026-12-01", "to": "2026-01-01"})
+    assert r.status_code == 422
+
+
+async def test_csv_export(client, super_token):
+    c, h, trip, _ = await _completed_trip(client, super_token)
+    await client.post("/billing/rate-plans", headers=h, json={
+        "name": "Std", "is_default": True, "effective_from": "2020-01-01",
+        "base_fare_cents": 1000})
+    claim = (await client.post(f"/billing/claims/from-trip/{trip['id']}", headers=h,
+                               json={"payer_type": "medicaid"})).json()
+    service_date = at(3).date().isoformat()
+    r = await client.get("/billing/claims.csv", headers=h,
+                         params={"from": service_date, "to": service_date})
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/csv")
+    assert "attachment;" in r.headers["content-disposition"]
+    lines = r.text.strip().split("\n")
+    assert lines[0].startswith("claim_number,service_date,status")
+    assert claim["claim_number"] in r.text
+
+
+async def test_csv_export_is_tenant_scoped(client, super_token):
+    a, ha, trip, _ = await _completed_trip(client, super_token)
+    b = await make_company(client, super_token, "bravo")
+    await client.post("/billing/rate-plans", headers=ha, json={
+        "name": "Std", "is_default": True, "effective_from": "2020-01-01",
+        "base_fare_cents": 1000})
+    claim = (await client.post(f"/billing/claims/from-trip/{trip['id']}", headers=ha,
+                               json={"payer_type": "medicaid"})).json()
+    service_date = at(3).date().isoformat()
+    # bravo's CSV is empty for the same range
+    r = await client.get("/billing/claims.csv", headers=b["admin_headers"],
+                         params={"from": service_date, "to": service_date})
+    assert claim["claim_number"] not in r.text
+
+
+# ------------------------------------------------------------------ pure-function CSV
+def test_claims_to_csv_pure():
+    from datetime import UTC, datetime
+    from app.core.base import new_id
+    from app.modules.billing.models import Claim, ClaimStatus, PayerType
+    from app.modules.billing.service import claims_to_csv
+
+    c = Claim(
+        id=new_id(), company_id=None, trip_id=None, broker_id=None, rate_plan_id=None,
+        claim_number="C-000001", status=ClaimStatus.SUBMITTED, payer_type=PayerType.MEDICAID,
+        service_date=date(2026, 10, 15), billed_cents=2500, paid_cents=0,
+        patient_responsibility_cents=0,
+        submitted_at=datetime(2026, 10, 16, 12, 0, tzinfo=UTC),
+    )
+    out = claims_to_csv([c])
+    lines = out.strip().split("\n")
+    assert len(lines) == 2
+    assert "C-000001" in lines[1]
+    assert "submitted" in lines[1]
+    assert "medicaid" in lines[1]
+    assert "2500" in lines[1]       
