@@ -27,9 +27,10 @@ from app.modules.routing.schemas import (
 )
 from app.modules.trips import conflicts
 from app.modules.trips.models import Trip
-from app.modules.trips.schemas import DriverBrief, VehicleBrief
+from app.modules.trips.schemas import DriverBrief
 from app.modules.trips.service import (
-    add_event, company_tz, day_bounds, lock_keys, lock_trip, patient_overlaps, place_out,
+    add_event, clear_assignment, company_tz, day_bounds, lock_keys, lock_trip, passengers_with_login,
+    patient_overlaps, place_out, set_assignment, vehicle_brief,
 )
 from app.modules.trips.state import EDITABLE, OCCUPYING, TripStatus
 from app.modules.users.models import User
@@ -119,6 +120,9 @@ async def create_plan(db: AsyncSession, actor: User, body: PlanRequest, request:
         else:
             resources.append(r)
     if not resources:
+        if skipped:  # pairs were given/found but none can drive: say why instead of a generic hint
+            reasons = ", ".join(sorted({s["reason"].replace("_", " ") for s in skipped}))
+            raise _http(422, f"No usable driver+vehicle pairs ({reasons}).")
         raise _http(422, "No usable driver+vehicle pairs. Pass `resources`, or set default drivers on your vehicles.")
     if len(resources) > MAX_RESOURCES:
         raise _http(422, f"At most {MAX_RESOURCES} vehicles per plan")
@@ -366,7 +370,7 @@ async def routes_out(db: AsyncSession, cid: UUID, routes: list[Route]) -> list[R
         out.append(RouteOut(
             id=r.id, plan_id=r.plan_id, route_date=r.route_date, status=r.status,
             driver=DriverBrief(id=d.id, full_name=u.full_name),
-            vehicle=VehicleBrief(id=r.vehicle_id, unit_number=vehicles[r.vehicle_id].unit_number),
+            vehicle=vehicle_brief(vehicles[r.vehicle_id]),
             planned_start_at=r.planned_start_at, planned_end_at=r.planned_end_at,
             drive_minutes=r.drive_minutes, distance_km=round(r.distance_m / 1000, 2),
             stops=stops.get(r.id, []),
@@ -448,13 +452,13 @@ async def apply_plan(db: AsyncSession, actor: User, plan_id: UUID, request: Requ
 
     now = datetime.now(UTC)
     assigned = 0
+    can_answer = await passengers_with_login(db, cid, {trips[tid].patient_id for tid in trip_route})
     for tid, route in trip_route.items():
         t = trips[tid]
         driver, _, vehicle = res[route.id]
         if (t.driver_id, t.vehicle_id, t.status) != (driver.id, vehicle.id, S.ASSIGNED):
             before, prev = t.status, t.driver_id
-            t.driver_id, t.vehicle_id, t.status = driver.id, vehicle.id, S.ASSIGNED
-            t.assigned_at, t.assigned_by, t.en_route_at = now, actor.id, None
+            set_assignment(t, driver.id, vehicle.id, actor.id, passenger_can_answer=t.patient_id in can_answer)
             add_event(db, t, "reassigned" if prev else "assigned", actor.id,
                       from_status=before, to_status=S.ASSIGNED,
                       meta={"driver_id": str(driver.id), "vehicle_id": str(vehicle.id), "plan_id": str(plan.id)})
@@ -463,8 +467,7 @@ async def apply_plan(db: AsyncSession, actor: User, plan_id: UUID, request: Requ
     for tid in drop_ids:
         t = trips[tid]
         before = t.status
-        t.driver_id = t.vehicle_id = t.assigned_at = t.assigned_by = t.en_route_at = None  # type: ignore[assignment]
-        t.status = S.SCHEDULED
+        clear_assignment(t)
         add_event(db, t, "unassigned", actor.id, from_status=before, to_status=S.SCHEDULED,
                   meta={"plan_id": str(plan.id)})
         freed += 1

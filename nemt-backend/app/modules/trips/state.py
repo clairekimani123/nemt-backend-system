@@ -53,6 +53,24 @@ def can_transition(current: TripStatus, target: TripStatus) -> bool:
     return target in TRANSITIONS[current]
 
 
+class PassengerResponse(StrEnum):
+    """The passenger's answer to the driver dispatch assigned. NULL on the trip = no answer is
+    needed (the patient has no portal login, so dispatch confirms by phone)."""
+
+    PENDING = "pending"      # driver assigned, passenger hasn't answered yet
+    ACCEPTED = "accepted"
+    DECLINED = "declined"    # driver released; the trip is back in the unassigned lane
+
+
+# A passenger may answer while the driver hasn't picked them up yet.
+PASSENGER_ANSWERABLE = {S.ASSIGNED, S.EN_ROUTE_TO_PICKUP, S.ARRIVED_AT_PICKUP}
+# The assigned driver's phone is shown to the passenger only while the ride is live.
+CONTACT_VISIBLE = OCCUPYING
+# The driver's position is shown to the passenger only while the driver is heading to (or
+# waiting at) THEIR pickup: earlier, it would reveal where the driver's previous passenger is.
+LOCATION_VISIBLE = {S.EN_ROUTE_TO_PICKUP, S.ARRIVED_AT_PICKUP}
+
+
 class Leg(StrEnum):
     OUTBOUND = "outbound"
     RETURN = "return"

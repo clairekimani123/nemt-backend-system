@@ -1,6 +1,16 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -8,18 +18,64 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.deps import get_current_user, get_db, require_permission
 from app.core.permissions import Permission, Role
 from app.core.security import hash_password, utcnow
+from app.core.storage import Storage, get_storage
 from app.modules.audit import service as audit
 from app.modules.auth.models import RefreshToken
 from app.modules.auth.service import get_user_by_email
+from app.modules.users import avatar
 from app.modules.users.models import User
 from app.modules.users.schemas import UserCreate, UserOut, UserUpdate
 
 router = APIRouter(prefix="/users", tags=["users"])
+# These roles need a matching profile row (drivers / patients), so a plain role switch would
+# leave a login that dispatch can't use. Drivers are created via POST /drivers.
+PROFILE_ROLES = {Role.DRIVER, Role.PASSENGER}
 
 
 @router.get("/me", response_model=UserOut)
 async def me(user: User = Depends(get_current_user)):
     return user
+
+
+@router.get("/me/avatar")
+async def my_avatar(user: User = Depends(get_current_user), storage: Storage = Depends(get_storage)):
+    return await avatar.serve(storage, user)
+
+
+@router.put("/me/avatar", response_model=UserOut)
+async def upload_my_avatar(
+    request: Request, file: UploadFile = File(...),
+    user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db),
+    storage: Storage = Depends(get_storage),
+):
+    """Every account type sets its OWN photo; there is no way to target another user here."""
+    data, kind = await avatar.read_image(file)
+    old = await avatar.replace(storage, user, data, kind)
+    try:
+        await audit.record(db, action="user.avatar_update", actor=user, resource_type="user",
+                           resource_id=user.id, request=request, meta={"content_type": kind, "size": len(data)})
+        await db.commit()
+    except Exception:
+        await storage.delete(user.avatar_key)  # type: ignore[arg-type]  # no orphan file
+        raise
+    if old:
+        await storage.delete(old)
+    await db.refresh(user)
+    return user
+
+
+@router.delete("/me/avatar", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_my_avatar(
+    request: Request, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db),
+    storage: Storage = Depends(get_storage),
+):
+    old = avatar.clear(user)
+    await audit.record(db, action="user.avatar_delete", actor=user, resource_type="user",
+                       resource_id=user.id, request=request)
+    await db.commit()
+    if old:
+        await storage.delete(old)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("", response_model=list[UserOut])
@@ -46,6 +102,8 @@ async def create_user(
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Cannot assign this role")
     if await get_user_by_email(db, actor.company_id, body.email):
         raise HTTPException(status.HTTP_409_CONFLICT, "Email already in use")
+    if body.role == Role.DRIVER:
+        raise HTTPException(422, "Create drivers with POST /drivers so they get a driver profile")
     user = User(
         company_id=actor.company_id, email=body.email, password_hash=hash_password(body.password),
         full_name=body.full_name, phone=body.phone, role=body.role,
@@ -74,6 +132,10 @@ async def update_user(
     changes = body.model_dump(exclude_unset=True)
     if changes.get("role") == Role.SUPER_ADMIN:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Cannot assign this role")
+    if "role" in changes and changes["role"] != target.role and (
+        changes["role"] in PROFILE_ROLES or target.role in PROFILE_ROLES
+    ):
+        raise HTTPException(422, "Driver and passenger accounts can't be switched to or from another role")
     if target.id == actor.id and (
         changes.get("is_active") is False or ("role" in changes and changes["role"] != actor.role)
     ):

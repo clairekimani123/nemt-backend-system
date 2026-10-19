@@ -15,6 +15,7 @@ class VehicleBase(BaseModel):
     plate_state: str = Field(pattern=r"^[A-Za-z]{2}$")
     make: str = Field(min_length=1, max_length=50)
     model: str = Field(min_length=1, max_length=50)
+    color: str | None = Field(default=None, min_length=1, max_length=30)
     year: int = Field(ge=1980, le=date.today().year + 1)
     vehicle_type: VehicleType
     seat_capacity: int = Field(ge=0, le=60)
@@ -33,6 +34,11 @@ class VehicleBase(BaseModel):
     def _upper(cls, v: str) -> str:
         return v.upper()
 
+    @field_validator("color")
+    @classmethod
+    def _color(cls, v: str | None) -> str | None:
+        return " ".join(v.split()) or None if v is not None else None
+
 
 class VehicleCreate(VehicleBase):
     status: VehicleStatus = VehicleStatus.ACTIVE
@@ -48,6 +54,7 @@ class VehicleUpdate(BaseModel):
     unit_number: str | None = Field(default=None, min_length=1, max_length=32)
     plate: str | None = Field(default=None, min_length=1, max_length=16)
     plate_state: str | None = Field(default=None, pattern=r"^[A-Za-z]{2}$")
+    color: str | None = Field(default=None, min_length=1, max_length=30)
     vehicle_type: VehicleType | None = None
     seat_capacity: int | None = Field(default=None, ge=0, le=60)
     wheelchair_capacity: int | None = Field(default=None, ge=0, le=10)
@@ -80,6 +87,7 @@ class VehicleOut(BaseModel):
     plate_state: str
     make: str
     model: str
+    color: str | None
     year: int
     vehicle_type: VehicleType
     seat_capacity: int

@@ -48,6 +48,7 @@ class Vehicle(IdMixin, TenantMixin, TimestampMixin, ArchiveMixin, Base):
     plate_state: Mapped[str] = mapped_column(String(2))
     make: Mapped[str] = mapped_column(String(50))
     model: Mapped[str] = mapped_column(String(50))
+    color: Mapped[str | None] = mapped_column(String(30))  # helps a passenger spot their ride
     year: Mapped[int] = mapped_column(SmallInteger)
     vehicle_type: Mapped[VehicleType] = mapped_column(str_enum(VehicleType, "vehicle_type"))
     # Capacity is what the route optimiser needs (Phase: routing). Seats and wheelchair

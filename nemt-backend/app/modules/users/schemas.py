@@ -18,6 +18,8 @@ class UserOut(BaseModel):
     is_active: bool
     mfa_enabled: bool
     last_login_at: datetime | None
+    has_avatar: bool = False
+    avatar_updated_at: datetime | None = None  # changes on every new photo: use it to bust caches
     created_at: datetime
 
 

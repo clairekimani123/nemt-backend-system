@@ -11,7 +11,6 @@ opens a short-lived open_tenant_session(company_id) so RLS still applies.
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
 from uuid import UUID
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -22,14 +21,17 @@ from app.core.db import open_tenant_session
 from app.core.permissions import Role
 from app.core.security import decode_token
 from app.modules.drivers.models import Driver
-from app.modules.realtime import publisher
+from app.modules.realtime import positions, publisher
 from app.modules.realtime.manager import manager
 from app.modules.realtime.schemas import (
-    AuthErr, AuthIn, AuthOk, LocationIn, PingIn, Pong,
+    AuthErr,
+    AuthIn,
+    AuthOk,
+    LocationIn,
+    PingIn,
+    Pong,
 )
-from app.modules.realtime.models import DriverPosition
 from app.modules.users.models import User
-from app.core.geo import point
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -64,16 +66,10 @@ async def _driver_id_for(company_id: UUID, user_id: UUID) -> UUID | None:
 
 async def _persist_position(company_id: UUID, driver_id: UUID, msg: LocationIn) -> None:
     async with open_tenant_session(company_id) as db:
-        db.add(DriverPosition(
-            company_id=company_id,
-            driver_id=driver_id,
-            trip_id=msg.trip_id,
-            location=point(msg.lat, msg.lng),
-            speed_mps=msg.speed_mps,
-            heading_deg=msg.heading_deg,
-            accuracy_m=msg.accuracy_m,
-            recorded_at=datetime.now(UTC),
-        ))
+        driver = await db.get(Driver, driver_id)
+        if driver is None or driver.archived_at is not None:
+            raise ValueError("driver profile not found")
+        await positions.record(db, driver, msg)
         await db.commit()
 
 

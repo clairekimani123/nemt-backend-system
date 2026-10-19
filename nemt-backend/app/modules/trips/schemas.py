@@ -6,8 +6,9 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validato
 
 from app.core.address import AddressIn
 from app.modules.patients.models import MobilityType
+from app.modules.vehicles.models import VehicleType
 from app.modules.trips.recurrence import validate_rrule
-from app.modules.trips.state import CancelReason, Leg, TripSource, TripStatus
+from app.modules.trips.state import CancelReason, Leg, PassengerResponse, TripSource, TripStatus
 
 
 # ---------------------------------------------------------------- input
@@ -123,6 +124,12 @@ class DriverBrief(BaseModel):
 class VehicleBrief(BaseModel):
     id: UUID
     unit_number: str
+    make: str
+    model: str
+    color: str | None
+    plate: str
+    plate_state: str
+    vehicle_type: VehicleType
 
 
 class TripOut(BaseModel):
@@ -161,6 +168,8 @@ class TripOut(BaseModel):
     no_show_at: datetime | None
     cancel_reason_code: CancelReason | None
     late_cancel: bool
+    passenger_response: PassengerResponse | None
+    passenger_responded_at: datetime | None
     created_at: datetime
 
 
@@ -215,7 +224,9 @@ class DriverTripOut(BaseModel):
     dropoff: PlaceOut
     scheduled_pickup_at: datetime
     appointment_at: datetime | None
+    vehicle: VehicleBrief | None
     vehicle_unit: str | None
+    passenger_response: PassengerResponse | None
     is_late: bool
 
 

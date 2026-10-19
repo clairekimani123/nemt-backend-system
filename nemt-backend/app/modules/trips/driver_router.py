@@ -3,7 +3,7 @@
 from datetime import UTC, date, datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,6 +12,9 @@ from app.core.permissions import Permission
 from app.modules.audit import service as audit
 from app.modules.drivers.models import Driver
 from app.modules.patients.models import Patient
+from app.modules.realtime import positions
+from app.modules.realtime import publisher as rt
+from app.modules.realtime.schemas import LocationPing
 from app.modules.trips import service
 from app.modules.trips.models import Trip
 from app.modules.trips.schemas import DriverTripOut, StatusIn
@@ -73,3 +76,14 @@ async def my_trip_status(trip_id: UUID, body: StatusIn, request: Request, user: 
     await service.change_status(db, user, trip_id, body, request, driver=driver)
     row = (await db.execute(_mine(driver).where(Trip.id == trip_id))).first()
     return service.to_driver_out(*row, datetime.now(UTC))  # type: ignore[misc]
+
+@router.post("/location", status_code=status.HTTP_204_NO_CONTENT)
+async def report_location(body: LocationPing, user: User = DRIVER, db: AsyncSession = Depends(get_db)):
+    """One GPS fix from the driver's device (the REST twin of the WebSocket 'location' message,
+    for when the socket is down). Positions are not audit-logged one by one: they are their own
+    append-only record, and logging every fix would bury the audit trail."""
+    driver = await _me(db, user)
+    await positions.record(db, driver, body)
+    await db.commit()
+    await rt.driver_position(user.company_id, driver.id, body.lat, body.lng, body.trip_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

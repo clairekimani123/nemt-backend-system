@@ -1,13 +1,38 @@
-from pydantic import BaseModel, Field
+from datetime import date
 
+from pydantic import BaseModel, Field, field_validator
+
+from app.core.address import AddressIn
 from app.core.types import Email, Password
+from app.modules.patients.models import MobilityType
 
 
 class RegisterIn(BaseModel):
+    """Passenger self-registration. Creates the login AND the passenger (patient) profile that
+    dispatch works with, so a new passenger is immediately visible to the company."""
+
     email: Email
     password: Password
     full_name: str = Field(min_length=1, max_length=200)
     phone: str | None = Field(default=None, max_length=32)
+    date_of_birth: date  # needed by dispatch (minors must travel with an escort)
+    mobility: MobilityType = MobilityType.AMBULATORY
+    home_address: AddressIn | None = None
+
+    @field_validator("full_name")
+    @classmethod
+    def _strip(cls, v: str) -> str:
+        v = " ".join(v.split())
+        if not v:
+            raise ValueError("full_name cannot be blank")
+        return v
+
+    @field_validator("date_of_birth")
+    @classmethod
+    def _dob(cls, v: date) -> date:
+        if v > date.today() or v.year < 1900:
+            raise ValueError("date_of_birth out of range")
+        return v
 
 
 class LoginIn(BaseModel):

@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.deps import get_current_user, get_db, get_tenant_db
 from app.core.security import create_mfa_token
 from app.modules.auth import schemas, service
+from app.modules.realtime import publisher as rt
 from app.modules.users.models import User
 from app.modules.users.schemas import UserOut
 
@@ -12,8 +13,13 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 @router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
 async def register(body: schemas.RegisterIn, request: Request, db: AsyncSession = Depends(get_tenant_db)):
-    """Passenger self-registration. Staff accounts are created by a Company Admin."""
-    return await service.register_passenger(db, db.info["tenant_id"], body, request)
+    """Passenger self-registration. Staff accounts are created by a Company Admin.
+
+    Also creates the passenger's profile (a `patients` row linked by user_id), so the new
+    passenger shows up for the company's dispatchers and administrators straight away."""
+    user, patient = await service.register_passenger(db, db.info["tenant_id"], body, request)
+    await rt.patient_created(user.company_id, patient.id, self_registered=True)
+    return user
 
 
 @router.post("/login", response_model=schemas.LoginOut)

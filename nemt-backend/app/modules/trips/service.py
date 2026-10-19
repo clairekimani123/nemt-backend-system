@@ -45,9 +45,11 @@ from app.modules.trips.state import (
     DRIVER_TARGETS,
     EDITABLE,
     NON_TERMINAL,
+    PASSENGER_ANSWERABLE,
     PRE_PICKUP,
     STATUS_ENDPOINT_TARGETS,
     Leg,
+    PassengerResponse,
     TripSource,
     TripStatus,
     can_transition,
@@ -173,6 +175,11 @@ def trip_select():  # type: ignore[no-untyped-def]
             .outerjoin(Vehicle, and_(Vehicle.id == Trip.vehicle_id, Vehicle.company_id == Trip.company_id)))
 
 
+def vehicle_brief(v: Vehicle) -> VehicleBrief:
+    return VehicleBrief(id=v.id, unit_number=v.unit_number, make=v.make, model=v.model, color=v.color,
+                        plate=v.plate, plate_state=v.plate_state, vehicle_type=v.vehicle_type)
+
+
 def to_out(trip: Trip, patient: Patient, driver: Driver | None, driver_user: User | None,
            vehicle: Vehicle | None, now: datetime) -> TripOut:
     late, risk = flags(trip, now)
@@ -181,7 +188,7 @@ def to_out(trip: Trip, patient: Patient, driver: Driver | None, driver_user: Use
         leg=trip.leg, source=trip.source,
         patient=PatientBrief(id=patient.id, first_name=patient.first_name, last_name=patient.last_name, phone=patient.phone),
         driver=DriverBrief(id=driver.id, full_name=driver_user.full_name) if driver and driver_user else None,
-        vehicle=VehicleBrief(id=vehicle.id, unit_number=vehicle.unit_number) if vehicle else None,
+        vehicle=vehicle_brief(vehicle) if vehicle else None,
         pickup=place_out(trip, "pickup"), dropoff=place_out(trip, "dropoff"),
         scheduled_pickup_at=trip.scheduled_pickup_at, appointment_at=trip.appointment_at,
         estimated_duration_min=trip.estimated_duration_min, ends_at=trip.ends_at, mobility=trip.mobility,
@@ -192,7 +199,8 @@ def to_out(trip: Trip, patient: Patient, driver: Driver | None, driver_user: Use
         arrived_pickup_at=trip.arrived_pickup_at, picked_up_at=trip.picked_up_at,
         arrived_dropoff_at=trip.arrived_dropoff_at, completed_at=trip.completed_at,
         cancelled_at=trip.cancelled_at, no_show_at=trip.no_show_at, cancel_reason_code=trip.cancel_reason_code,
-        late_cancel=trip.late_cancel, created_at=trip.created_at,
+        late_cancel=trip.late_cancel, passenger_response=trip.passenger_response,
+        passenger_responded_at=trip.passenger_responded_at, created_at=trip.created_at,
     )
 
 
@@ -211,7 +219,8 @@ def to_driver_out(trip: Trip, patient: Patient, vehicle: Vehicle | None, now: da
         has_service_animal=trip.has_service_animal, special_instructions=_decrypt(trip.special_instructions_enc),
         pickup=place_out(trip, "pickup"), dropoff=place_out(trip, "dropoff"),
         scheduled_pickup_at=trip.scheduled_pickup_at, appointment_at=trip.appointment_at,
-        vehicle_unit=vehicle.unit_number if vehicle else None, is_late=flags(trip, now)[0],
+        vehicle=vehicle_brief(vehicle) if vehicle else None, vehicle_unit=vehicle.unit_number if vehicle else None,
+        passenger_response=trip.passenger_response, is_late=flags(trip, now)[0],
     )
 
 
@@ -276,7 +285,8 @@ def build_trip(*, company_id: UUID, actor_id: UUID | None, patient: Patient, pic
     return trip
 
 
-async def create_trips(db: AsyncSession, actor: User, body: TripCreate, request: Request) -> list[UUID]:
+async def create_trips(db: AsyncSession, actor: User, body: TripCreate, request: Request,
+                       source: TripSource = TripSource.DISPATCHER) -> list[UUID]:
     cid = actor.company_id
     patient = await get_or_404(db, Patient, body.patient_id, cid, "Patient")
     if patient.archived_at is not None:
@@ -297,7 +307,7 @@ async def create_trips(db: AsyncSession, actor: User, body: TripCreate, request:
 
     common = dict(company_id=cid, actor_id=actor.id, patient=patient, duration=duration, mobility=mobility,
                   escorts=escorts, oxygen=oxygen, animal=animal, instructions=body.special_instructions,
-                  broker_id=body.broker_id, auth_no=body.authorization_number, source=TripSource.DISPATCHER)
+                  broker_id=body.broker_id, auth_no=body.authorization_number, source=source)
     outbound = build_trip(**common, pickup=pickup, dropoff=dropoff, number=await next_number(db, cid, "trip"),
                           pickup_at=start, appointment_at=body.appointment_at, leg=Leg.OUTBOUND)
     trips = [outbound]
@@ -314,9 +324,11 @@ async def create_trips(db: AsyncSession, actor: User, body: TripCreate, request:
         db.add(t)
     await flush_or_409(db, "Could not save the trip")
     for t in trips:
-        add_event(db, t, "created", actor.id, to_status=S.SCHEDULED, meta={"leg": t.leg.value})
-        await audit.record(db, action="trip.create", actor=actor, resource_type="trip", resource_id=t.id, request=request)
+        add_event(db, t, "created", actor.id, to_status=S.SCHEDULED, meta={"leg": t.leg.value, "source": source.value})
+        await audit.record(db, action="trip.create", actor=actor, resource_type="trip", resource_id=t.id, request=request,
+                           meta={"source": source.value})
     await db.commit()
+    await rt.trip_created(cid, [t.id for t in trips], source.value)
     return [t.id for t in trips]
 
 
@@ -383,6 +395,35 @@ async def update_trip(db: AsyncSession, actor: User, trip_id: UUID, body: TripUp
 
 
 # ======================================================================= assigning
+async def passengers_with_login(db: AsyncSession, company_id: UUID, patient_ids: set[UUID]) -> set[UUID]:
+    """Patients who can answer in the portal. Without a login, dispatch confirms by phone."""
+    if not patient_ids:
+        return set()
+    return set((await db.scalars(select(Patient.id).where(
+        Patient.company_id == company_id, Patient.id.in_(patient_ids), Patient.user_id.is_not(None)))).all())
+
+
+def set_assignment(trip: Trip, driver_id: UUID, vehicle_id: UUID, actor_id: UUID | None, *,
+                   passenger_can_answer: bool) -> None:
+    """The ONE place a driver + vehicle are put on a trip. A new driver needs a fresh answer from
+    the passenger; a vehicle swap with the same driver keeps it (the passenger still sees the
+    new vehicle details)."""
+    if trip.driver_id != driver_id:
+        trip.passenger_response = PassengerResponse.PENDING if passenger_can_answer else None
+        trip.passenger_responded_at = None
+    trip.driver_id, trip.vehicle_id = driver_id, vehicle_id
+    trip.status, trip.assigned_at, trip.assigned_by = S.ASSIGNED, datetime.now(UTC), actor_id
+    trip.en_route_at = None
+
+
+def clear_assignment(trip: Trip, *, declined: bool = False) -> None:
+    """Release the driver + vehicle; the trip goes back to the unassigned lane."""
+    trip.driver_id = trip.vehicle_id = trip.assigned_at = trip.assigned_by = trip.en_route_at = None  # type: ignore[assignment]
+    trip.status = S.SCHEDULED
+    trip.passenger_response = PassengerResponse.DECLINED if declined else None
+    trip.passenger_responded_at = datetime.now(UTC) if declined else None
+
+
 async def lock_keys(db: AsyncSession, *keys: str) -> None:
     """Advisory locks: 'only one request may be deciding about driver X / vehicle Y at a time'.
     Taken in sorted order so two requests can never deadlock each other."""
@@ -408,9 +449,8 @@ async def assign_trip(db: AsyncSession, actor: User, trip_id: UUID, driver_id: U
         raise _err(409, {"message": "Assignment refused", **report_out(rep).model_dump(mode="json")})
     previous = (trip.driver_id, trip.vehicle_id)
     before = trip.status
-    trip.driver_id, trip.vehicle_id = driver.id, vehicle.id
-    trip.status, trip.assigned_at, trip.assigned_by = S.ASSIGNED, datetime.now(UTC), actor.id
-    trip.en_route_at = None
+    patient = await get_or_404(db, Patient, trip.patient_id, actor.company_id, "Patient")
+    set_assignment(trip, driver.id, vehicle.id, actor.id, passenger_can_answer=patient.user_id is not None)
     await flush_or_409(db, "Could not assign the trip")
     reassigned = previous[0] is not None
     meta = {"driver_id": str(driver.id), "vehicle_id": str(vehicle.id),
@@ -420,6 +460,8 @@ async def assign_trip(db: AsyncSession, actor: User, trip_id: UUID, driver_id: U
         # real-time: tell dispatchers and the driver
     driver_user_id = du.id
     await rt.trip_assigned(trip.company_id, trip.id, driver.id, vehicle.id, driver_user_id)
+    if patient.user_id is not None:  # in-app: the passenger's portal refreshes its "driver found" card
+        await rt.trip_changed_for_user(trip.company_id, patient.user_id, trip.id, "assigned")
     await audit.record(db, action="trip.assign", actor=actor, resource_type="trip", resource_id=trip.id, request=request, meta=meta)
         # notify the driver: "you've got a new trip"
     await notifier.notify(
@@ -434,6 +476,16 @@ async def assign_trip(db: AsyncSession, actor: User, trip_id: UUID, driver_id: U
             "company_name": "Your company",   # optionally look up Company.name
         },
     )
+    if patient.user_id is not None and patient.email:
+        # "a driver has been found": delivered only if the company has an active template for it
+        # (otherwise logged as skipped). In-app, the portal shows it via the event above.
+        await notifier.notify(
+            db, company_id=trip.company_id, event="trip.assigned.patient",
+            channel=NotifyChannel.EMAIL, to=patient.email, recipient_user_id=patient.user_id,
+            context={"patient_first_name": patient.first_name, "trip_ref": f"T-{trip.trip_number:06d}",
+                     "driver_name": du.full_name, "vehicle": f"{vehicle.color or ''} {vehicle.make} {vehicle.model}".strip(),
+                     "plate": vehicle.plate},
+        )
     await db.commit()
     return trip
 
@@ -443,11 +495,50 @@ async def unassign_trip(db: AsyncSession, actor: User, trip_id: UUID, request: R
     if trip.status not in {S.ASSIGNED, S.EN_ROUTE_TO_PICKUP}:
         raise _err(409, f"A {trip.status.value} trip cannot be unassigned")
     before, old_driver = trip.status, trip.driver_id
-    trip.driver_id = trip.vehicle_id = trip.assigned_at = trip.assigned_by = trip.en_route_at = None  # type: ignore[assignment]
-    trip.status = S.SCHEDULED
+    clear_assignment(trip)
     await flush_or_409(db, "Could not unassign the trip")
     add_event(db, trip, "unassigned", actor.id, from_status=before, to_status=S.SCHEDULED, meta={"previous_driver_id": str(old_driver)})
     await audit.record(db, action="trip.unassign", actor=actor, resource_type="trip", resource_id=trip.id, request=request)
+    patient = await db.get(Patient, trip.patient_id)
+    if patient is not None and patient.user_id is not None:
+        await rt.trip_changed_for_user(trip.company_id, patient.user_id, trip.id, "unassigned")
+    await db.commit()
+    return trip
+
+
+async def answer_assignment(db: AsyncSession, actor: User, patient: Patient, trip_id: UUID, *, accept: bool,
+                            expected_driver_id: UUID, request: Request) -> Trip:
+    """The passenger accepts or declines the driver dispatch assigned. `expected_driver_id` is
+    the driver the passenger was looking at: if dispatch changed it meanwhile, the answer is
+    refused instead of being applied to someone the passenger never saw."""
+    trip = await lock_trip(db, actor.company_id, trip_id)
+    if trip.patient_id != patient.id:
+        raise _err(404, "Trip not found")  # someone else's trip is indistinguishable from a missing one
+    if trip.driver_id is None or trip.status not in PASSENGER_ANSWERABLE:
+        raise _err(409, "There is no driver assignment to answer for this trip")
+    if trip.driver_id != expected_driver_id:
+        raise _err(409, "Dispatch has changed the driver for this trip. Please review the new driver.")
+    if trip.passenger_response != PassengerResponse.PENDING:
+        state = trip.passenger_response.value if trip.passenger_response else "not needed"
+        raise _err(409, f"This assignment has already been answered ({state})")
+    if not accept and trip.status not in {S.ASSIGNED, S.EN_ROUTE_TO_PICKUP}:  # same rule as unassign
+        raise _err(409, "Your driver has already arrived. Please speak to them or call dispatch.")
+    driver_id, vehicle_id, before = trip.driver_id, trip.vehicle_id, trip.status
+    driver = await db.get(Driver, driver_id)
+    if accept:
+        trip.passenger_response, trip.passenger_responded_at = PassengerResponse.ACCEPTED, datetime.now(UTC)
+        event = "passenger_accepted"
+        add_event(db, trip, event, actor.id, meta={"driver_id": str(driver_id), "vehicle_id": str(vehicle_id)})
+    else:
+        clear_assignment(trip, declined=True)
+        event = "passenger_declined"
+        add_event(db, trip, event, actor.id, from_status=before, to_status=S.SCHEDULED,
+                  meta={"driver_id": str(driver_id), "vehicle_id": str(vehicle_id)})
+    await flush_or_409(db, "Could not save your answer")
+    await audit.record(db, action=f"trip.{event}", actor=actor, resource_type="trip", resource_id=trip.id,
+                       request=request, meta={"driver_id": str(driver_id)})
+    await rt.assignment_answered(trip.company_id, trip.id, driver_id, accepted=accept,
+                                 driver_user_id=driver.user_id if driver else None)
     await db.commit()
     return trip
 
@@ -494,6 +585,9 @@ async def change_status(db: AsyncSession, actor: User, trip_id: UUID, body: Stat
         raise _err(403, "Drivers cannot set that status; ask dispatch")
     if body.status not in STATUS_ENDPOINT_TARGETS:
         raise _err(422, "Use the assign / unassign endpoints for 'scheduled' and 'assigned'")
+    if (driver is not None and settings.require_passenger_acceptance and body.status == S.EN_ROUTE_TO_PICKUP
+            and trip.passenger_response == PassengerResponse.PENDING):
+        raise _err(409, "The passenger hasn't accepted this assignment yet. Wait for them, or ask dispatch.")
     apply_transition(db, trip, body.status, actor.id, body, by_driver=driver is not None)
     await audit.record(db, action="trip.status", actor=actor, resource_type="trip", resource_id=trip.id,
     request=request, meta={"to": body.status.value})
