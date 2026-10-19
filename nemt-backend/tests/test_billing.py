@@ -505,4 +505,144 @@ def test_claims_to_csv_pure():
     assert "C-000001" in lines[1]
     assert "submitted" in lines[1]
     assert "medicaid" in lines[1]
-    assert "2500" in lines[1]       
+    assert "2500" in lines[1]  
+
+
+# ------------------------------------------------------------------ 837P export
+async def test_837p_single_claim_is_valid_x12(client, super_token):
+    c, h, trip, _ = await _completed_trip(client, super_token)
+    await client.post("/billing/rate-plans", headers=h, json={
+        "name": "Std", "is_default": True, "effective_from": "2020-01-01",
+        "base_fare_cents": 1000})
+    claim = (await client.post(f"/billing/claims/from-trip/{trip['id']}", headers=h,
+                               json={"payer_type": "medicaid"})).json()
+
+    r = await client.get(f"/billing/claims/{claim['id']}/837p.edi", headers=h)
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("application/edi-x12")
+    body = r.text
+    # X12 envelope: starts with ISA, ends with IEA
+    assert body.startswith("ISA*")
+    assert body.rstrip().endswith("~")
+    assert "IEA*1*" in body
+    # functional group
+    assert "GS*HC*" in body
+    assert "GE*1*" in body
+    # transaction set for the claim
+    assert "ST*837*" in body
+    assert "SE*" in body
+    assert "CLM*" in body
+    assert claim["claim_number"] in body
+    # ST/SE must be balanced
+    st_count = body.count("ST*837*")
+    se_count = body.count("SE*")
+    assert st_count == se_count == 1
+
+
+async def test_837p_batch(client, super_token):
+    c, h, trip, w = await _completed_trip(client, super_token)
+    await client.post("/billing/rate-plans", headers=h, json={
+        "name": "Std", "is_default": True, "effective_from": "2020-01-01",
+        "base_fare_cents": 1000})
+    claim1 = (await client.post(f"/billing/claims/from-trip/{trip['id']}", headers=h,
+                                json={"payer_type": "medicaid"})).json()
+    t2 = await new_trip(client, h, w["patient"], w["facility_id"], at(3, 16))
+    await assign(client, h, t2["id"], w["driver"]["id"], w["vehicle_id"])
+    drv = bearer((await login(client, "alpha", w["driver"]["email"]))["access_token"])
+    for s in ("en_route_to_pickup", "arrived_at_pickup", "passenger_on_board",
+              "en_route_to_dropoff", "arrived_at_dropoff", "completed"):
+        await client.post(f"/driver/trips/{t2['id']}/status", headers=drv,
+                          json={"status": s, "latitude": 38.9, "longitude": -77.0})
+    claim2 = (await client.post(f"/billing/claims/from-trip/{t2['id']}", headers=h,
+                                json={"payer_type": "medicaid"})).json()
+
+    r = await client.post("/billing/claims/batch-837p", headers=h,
+                          json={"claim_ids": [claim1["id"], claim2["id"]]})
+    assert r.status_code == 200
+    body = r.text
+    assert body.count("ST*837*") == 2
+    assert body.count("SE*") == 2
+    assert "GE*2*" in body
+    assert claim1["claim_number"] in body
+    assert claim2["claim_number"] in body
+
+
+async def test_837p_is_tenant_scoped(client, super_token):
+    a, ha, trip, _ = await _completed_trip(client, super_token)
+    b = await make_company(client, super_token, "bravo")
+    await client.post("/billing/rate-plans", headers=ha, json={
+        "name": "Std", "is_default": True, "effective_from": "2020-01-01",
+        "base_fare_cents": 1000})
+    claim = (await client.post(f"/billing/claims/from-trip/{trip['id']}", headers=ha,
+                               json={"payer_type": "medicaid"})).json()
+    r = await client.get(f"/billing/claims/{claim['id']}/837p.edi", headers=b["admin_headers"])
+    assert r.status_code == 404
+
+
+# ------------------------------------------------------------------ CMS-1500 PDF
+async def test_cms1500_returns_pdf(client, super_token):
+    c, h, trip, _ = await _completed_trip(client, super_token)
+    await client.post("/billing/rate-plans", headers=h, json={
+        "name": "Std", "is_default": True, "effective_from": "2020-01-01",
+        "base_fare_cents": 1000})
+    claim = (await client.post(f"/billing/claims/from-trip/{trip['id']}", headers=h,
+                               json={"payer_type": "medicaid"})).json()
+
+    r = await client.get(f"/billing/claims/{claim['id']}/cms1500.pdf", headers=h)
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("application/pdf")
+    # every PDF starts with the magic bytes %PDF-
+    assert r.content.startswith(b"%PDF-")
+    assert len(r.content) > 1000
+
+
+async def test_cms1500_tenant_scoped(client, super_token):
+    a, ha, trip, _ = await _completed_trip(client, super_token)
+    b = await make_company(client, super_token, "bravo")
+    await client.post("/billing/rate-plans", headers=ha, json={
+        "name": "Std", "is_default": True, "effective_from": "2020-01-01",
+        "base_fare_cents": 1000})
+    claim = (await client.post(f"/billing/claims/from-trip/{trip['id']}", headers=ha,
+                               json={"payer_type": "medicaid"})).json()
+    r = await client.get(f"/billing/claims/{claim['id']}/cms1500.pdf", headers=b["admin_headers"])
+    assert r.status_code == 404
+
+
+# ------------------------------------------------------------------ pure-function 837P
+def test_837p_generator_deterministic():
+    """The same claim must produce the same file on every call. Otherwise a retry
+    looks like a new submission to the clearinghouse."""
+    from datetime import UTC, date, datetime
+    from app.core.base import new_id
+    from app.modules.billing.formats.edi import (
+        BillingProvider, Payer, Receiver, Subscriber, Submitter, generate_837p,
+    )
+    from app.modules.billing.models import Claim, ClaimLine, ClaimStatus, PayerType
+
+    claim = Claim(
+        id=new_id(), company_id=None, trip_id=None, broker_id=None, rate_plan_id=None,
+        claim_number="C-000042", status=ClaimStatus.DRAFT, payer_type=PayerType.MEDICAID,
+        service_date=date(2026, 10, 15), billed_cents=2500, paid_cents=0,
+        patient_responsibility_cents=0, diagnosis_code="Z78.9",
+    )
+    line = ClaimLine(
+        id=new_id(), company_id=None, claim_id=claim.id, line_number=1,
+        service_date=date(2026, 10, 15), procedure_code="A0120",
+        units=1, charge_cents=2500,
+    )
+    submitter = Submitter(name="TEST", id="TESTS", contact_name="X", contact_phone="5555555555")
+    receiver = Receiver(name="CLR", id="CLR")
+    provider = BillingProvider(name="TEST", npi="1234567890", tax_id="123456789",
+                               address_line="1 X", city="Y", state="VA", zip_code="22201")
+    subscriber = Subscriber(member_id="M-1", first_name="A", last_name="B",
+                            dob=date(1950, 1, 1), gender="U",
+                            address_line="1 X", city="Y", state="VA", zip_code="22201")
+    payer = Payer(name="MEDICAID", payer_id="VA01")
+
+    a = generate_837p([(claim, [line])], submitter=submitter, receiver=receiver,
+                      billing_provider=provider, subscriber_for=lambda c: subscriber,
+                      payer_for=lambda c: payer, submit_date=date(2026, 10, 15))
+    b = generate_837p([(claim, [line])], submitter=submitter, receiver=receiver,
+                      billing_provider=provider, subscriber_for=lambda c: subscriber,
+                      payer_for=lambda c: payer, submit_date=date(2026, 10, 15))
+    assert a == b

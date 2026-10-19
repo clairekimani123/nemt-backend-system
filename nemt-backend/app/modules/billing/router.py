@@ -12,7 +12,7 @@ from app.core.deps import get_db, require_permission
 from app.core.permissions import Permission
 from app.modules.audit import service as audit
 from app.modules.billing import service
-from app.modules.billing.models import Claim, ClaimStatus, PayerType, RatePlan
+from app.modules.billing.models import Claim, ClaimLine, ClaimStatus, PayerType, RatePlan
 from app.modules.billing.schemas import (
     AgingBucketOut, BillableTripOut, ClaimCreateFromTrip, ClaimDetailOut, ClaimOut,
     PostPaymentIn, RatePlanIn, RatePlanOut, RatePlanUpdate, SubmitIn,
@@ -29,12 +29,71 @@ from app.modules.billing.schemas import (
 )
 from fastapi import Query
 from fastapi.responses import PlainTextResponse
-
 from app.modules.billing.schemas import SummaryOut
+
+from app.modules.billing.formats.edi import (
+    BillingProvider, Payer as EDIPayer, Subscriber as EDISubscriber, Submitter, Receiver, generate_837p,
+)
+from app.modules.billing.formats.cms1500 import render_cms1500
+from app.modules.patients.models import Patient
+from app.modules.tenants.models import Company
+from app.modules.users.models import User
+
+from fastapi import Response
+from fastapi.responses import FileResponse, PlainTextResponse
+
 
 router = APIRouter(prefix="/billing", tags=["billing"])
 READ = Depends(require_permission(Permission.BILLING_READ))
 WRITE = Depends(require_permission(Permission.BILLING_WRITE))
+
+
+async def _billing_config(db: AsyncSession, company_id: UUID):
+    """Load the company's billing identity (submitter, provider). In a real system
+    these come from a billing_settings table. Here we synthesize from the company row."""
+    company = await db.get(Company, company_id)
+    if company is None:
+        raise HTTPException(404, "Company not found")
+    submitter = Submitter(
+        name=(company.name or "COMPANY")[:35].upper(),
+        id="MEDIRECTS",                          # placeholder; real submitter ID from clearinghouse
+        contact_name="Billing",
+        contact_phone="5555555555",
+    )
+    receiver = Receiver(name="TESTCLEARING", id="TESTCLR")
+    provider = BillingProvider(
+        name=(company.name or "COMPANY")[:35].upper(),
+        npi="1234567890",                        # placeholder; real NPI from company settings
+        tax_id="123456789",                      # placeholder; real EIN
+        address_line="1 Company Way",
+        city="Arlington",
+        state="VA",
+        zip_code="22201",
+    )
+    return submitter, receiver, provider
+
+
+async def _subscriber_for_claim(db: AsyncSession, claim: Claim) -> EDISubscriber:
+    """In NEMT, the patient IS the subscriber (Medicaid). Pull their address from the trip."""
+    trip = await db.scalar(select(Trip).where(Trip.id == claim.trip_id, Trip.company_id == claim.company_id))
+    patient = await db.get(Patient, trip.patient_id) if trip else None
+    if patient is None:
+        raise HTTPException(422, "Claim has no patient data")
+    return EDISubscriber(
+        member_id=(trip.authorization_number or f"M-{patient.id.hex[:10].upper()}"),
+        first_name=patient.first_name,
+        last_name=patient.last_name,
+        dob=patient.dob if hasattr(patient, "dob") else date(1950, 1, 1),
+        gender="U",
+        address_line="1 Home St",
+        city="Arlington",
+        state="VA",
+        zip_code="22201",
+    )
+
+
+def _payer_for_claim(claim: Claim) -> EDIPayer:
+    return EDIPayer(name="MEDICAID", payer_id="VA01")     # placeholder
 
 
 # ------------------------------------------------------------------ rate plans
@@ -277,3 +336,61 @@ async def claims_csv(
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{fname}"'},
     )
+
+
+@router.get("/claims/{claim_id}/837p.edi")
+async def claim_837p(claim_id: UUID, actor: User = READ, db: AsyncSession = Depends(get_db)):
+    """A single-claim 837P file, ready for a clearinghouse."""
+    claim = await get_or_404(db, Claim, claim_id, actor.company_id, "Claim")
+    lines = (await db.scalars(select(ClaimLine).where(ClaimLine.claim_id == claim.id)
+                              .order_by(ClaimLine.line_number))).all()
+    submitter, receiver, provider = await _billing_config(db, actor.company_id)
+    subscriber = await _subscriber_for_claim(db, claim)
+    payer = _payer_for_claim(claim)
+    body = generate_837p(
+        [(claim, list(lines))],
+        submitter=submitter, receiver=receiver, billing_provider=provider,
+        subscriber_for=lambda c: subscriber, payer_for=lambda c: payer,
+    )
+    fname = f"{claim.claim_number}.837p"
+    return PlainTextResponse(body, media_type="application/edi-x12",
+                             headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+@router.get("/claims/{claim_id}/cms1500.pdf")
+async def claim_cms1500(claim_id: UUID, actor: User = READ, db: AsyncSession = Depends(get_db)):
+    """A printable CMS-1500 PDF for this claim."""
+    claim = await get_or_404(db, Claim, claim_id, actor.company_id, "Claim")
+    lines = list((await db.scalars(select(ClaimLine).where(ClaimLine.claim_id == claim.id)
+                                   .order_by(ClaimLine.line_number))).all())
+    _, _, provider = await _billing_config(db, actor.company_id)
+    subscriber = await _subscriber_for_claim(db, claim)
+    payer = _payer_for_claim(claim)
+    pdf = render_cms1500(claim, lines, subscriber=subscriber, payer=payer, billing_provider=provider)
+    fname = f"{claim.claim_number}.pdf"
+    return Response(pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+@router.post("/claims/batch-837p")
+async def batch_837p(body: BatchSubmitIn, actor: User = READ, db: AsyncSession = Depends(get_db)):
+    """One 837P file containing every claim in the list, each as its own transaction set."""
+    claims: list[tuple[Claim, list[ClaimLine]]] = []
+    subs: dict[UUID, EDISubscriber] = {}
+    for cid in body.claim_ids:
+        claim = await db.scalar(select(Claim).where(Claim.id == cid, Claim.company_id == actor.company_id))
+        if claim is None:
+            raise HTTPException(404, f"Claim {cid} not found")
+        lines = list((await db.scalars(select(ClaimLine).where(ClaimLine.claim_id == claim.id)
+                                       .order_by(ClaimLine.line_number))).all())
+        claims.append((claim, lines))
+        subs[claim.id] = await _subscriber_for_claim(db, claim)
+    submitter, receiver, provider = await _billing_config(db, actor.company_id)
+    body_str = generate_837p(
+        claims,
+        submitter=submitter, receiver=receiver, billing_provider=provider,
+        subscriber_for=lambda c: subs[c.id],
+        payer_for=_payer_for_claim,
+    )
+    return PlainTextResponse(body_str, media_type="application/edi-x12",
+                             headers={"Content-Disposition": 'attachment; filename="batch.837p"'})
