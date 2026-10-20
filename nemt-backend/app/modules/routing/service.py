@@ -21,6 +21,7 @@ from app.modules.patients.models import MobilityType, Patient
 from app.modules.routing import solver
 from app.modules.routing.models import PlanStatus, Route, RoutePlan, RouteStatus, RouteStop
 from app.modules.routing.providers import Matrix, Point, RoutingError, get_router, traffic_factor
+from app.modules.realtime import publisher as rt
 from app.modules.routing.schemas import (
     AppointmentOut, EstimateOut, GeometryOut, LoadOut, PlanOut, PlanRequest, RouteOut,
     SkippedResourceOut, StopOut, UnassignedOut,
@@ -30,7 +31,7 @@ from app.modules.trips.models import Trip
 from app.modules.trips.schemas import DriverBrief
 from app.modules.trips.service import (
     add_event, clear_assignment, company_tz, day_bounds, lock_keys, lock_trip, passengers_with_login,
-    patient_overlaps, place_out, set_assignment, vehicle_brief,
+    patient_overlaps, place_out, set_assignment, trip_user_ids, vehicle_brief,
 )
 from app.modules.trips.state import EDITABLE, OCCUPYING, TripStatus
 from app.modules.users.models import User
@@ -453,11 +454,14 @@ async def apply_plan(db: AsyncSession, actor: User, plan_id: UUID, request: Requ
     now = datetime.now(UTC)
     assigned = 0
     can_answer = await passengers_with_login(db, cid, {trips[tid].patient_id for tid in trip_route})
+    # Who to tell once this is committed: (trip, new driver's login or None, previous driver id)
+    changed: list[tuple[Trip, UUID | None, UUID | None]] = []
     for tid, route in trip_route.items():
         t = trips[tid]
-        driver, _, vehicle = res[route.id]
+        driver, driver_user, vehicle = res[route.id]
         if (t.driver_id, t.vehicle_id, t.status) != (driver.id, vehicle.id, S.ASSIGNED):
             before, prev = t.status, t.driver_id
+            changed.append((t, driver_user.id, prev if prev != driver.id else None))
             set_assignment(t, driver.id, vehicle.id, actor.id, passenger_can_answer=t.patient_id in can_answer)
             add_event(db, t, "reassigned" if prev else "assigned", actor.id,
                       from_status=before, to_status=S.ASSIGNED,
@@ -467,6 +471,7 @@ async def apply_plan(db: AsyncSession, actor: User, plan_id: UUID, request: Requ
     for tid in drop_ids:
         t = trips[tid]
         before = t.status
+        changed.append((t, None, t.driver_id))
         clear_assignment(t)
         add_event(db, t, "unassigned", actor.id, from_status=before, to_status=S.SCHEDULED,
                   meta={"plan_id": str(plan.id)})
@@ -484,8 +489,22 @@ async def apply_plan(db: AsyncSession, actor: User, plan_id: UUID, request: Requ
                        resource_id=plan.id, request=request,
                        meta={"routes": len(routes), "assigned": assigned, "unassigned": freed})
     await db.commit()
+    await _publish_plan_changes(db, cid, changed)
     return {"plan_id": plan.id, "routes_published": len(routes),
             "trips_assigned": assigned, "trips_unassigned": freed}
+
+
+async def _publish_plan_changes(db: AsyncSession, cid: UUID, changed: list[tuple[Trip, UUID | None, UUID | None]]) -> None:
+    """After an applied plan: the same signals as a manual assign/unassign, so driver and passenger
+    screens update without waiting for their next poll."""
+    for t, new_driver_user, previous_driver in changed:
+        old_user, patient_user = await trip_user_ids(db, cid, previous_driver, t.patient_id)
+        if t.driver_id is not None and new_driver_user is not None:
+            await rt.trip_assigned(cid, t.id, t.driver_id, t.vehicle_id, new_driver_user)  # type: ignore[arg-type]
+        else:
+            await rt.trip_status_changed(cid, t.id, t.status, None, None)
+        await rt.trip_changed_for_users(cid, [patient_user], t.id, "assigned" if t.driver_id else "unassigned")
+        await rt.trip_changed_for_users(cid, [old_user], t.id, "unassigned")
 
 
 async def discard_plan(db: AsyncSession, actor: User, plan_id: UUID, request: Request) -> None:

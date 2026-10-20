@@ -16,6 +16,7 @@ class Settings(BaseSettings):
 
     jwt_secret: SecretStr
     jwt_issuer: str = "mediroutes"
+    jwt_audience: str = "mediroutes-api"
     access_token_minutes: int = 15
     refresh_token_days: int = 14
     mfa_token_minutes: int = 5
@@ -34,6 +35,8 @@ class Settings(BaseSettings):
     # login still has to accept the assigned driver. Dispatch can always override.
     require_passenger_acceptance: bool = True
     location_stale_seconds: int = 120   # a driver position older than this is flagged as stale
+    location_min_interval_seconds: int = 5  # fixes closer together than this are not stored
+    location_retention_days: int = 30   # driver positions older than this are purged nightly
 
     # --- trip engine rules (all tunable per deployment) ---
     default_trip_minutes: int = 45      # used when a trip has no duration estimate

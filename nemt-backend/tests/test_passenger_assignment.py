@@ -50,6 +50,8 @@ async def _setup(client, super_token, slug: str = "alpha") -> dict:
     assert r.status_code == 201, r.text
     d1h = bearer((await login(client, slug, d1["email"]))["access_token"])
     d2h = bearer((await login(client, slug, d2["email"]))["access_token"])
+    for h in (d1h, d2h):  # drivers start off duty; off-duty location is refused (test_driver_dashboard)
+        assert (await client.put("/driver/me/duty", headers=h, json={"duty_status": "available"})).status_code == 200
     return {"c": c, "admin": admin, "disp": disp, "rider": rider, "trip": r.json()[0], "fac": fac,
             "d1": d1, "d2": d2, "v1": v1, "v2": v2, "d1h": d1h, "d2h": d2h}
 

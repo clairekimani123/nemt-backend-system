@@ -43,7 +43,7 @@ async def test_deactivated_user_loses_access_immediately(client, super_token):
     assert (await client.post("/auth/refresh", json={"refresh_token": tokens["refresh_token"]})).status_code == 401
     r = await client.post("/auth/login", headers={"X-Tenant": "alpha"},
                           json={"email": "disp@alpha.example.com", "password": PW})
-    assert r.status_code == 401
+    assert r.status_code == 403 and "deactivated" in r.json()["detail"]  # correct password: told why
 
 
 async def test_duplicate_email_and_slug_conflicts(client, super_token):

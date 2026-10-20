@@ -25,6 +25,8 @@ class User(IdMixin, TenantMixin, TimestampMixin, Base):
     failed_login_count: Mapped[int] = mapped_column(default=0, server_default=text("0"))
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Set when an administrator gives the user a temporary password (see auth.service).
+    must_change_password: Mapped[bool] = mapped_column(default=False, server_default=text("false"))
 
     # Profile photo: bytes live in encrypted storage under a server-generated key.
     avatar_key: Mapped[str | None] = mapped_column(String(80))

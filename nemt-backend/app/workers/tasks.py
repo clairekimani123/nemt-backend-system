@@ -27,3 +27,9 @@ def send_daily_driver_manifests() -> dict[str, int]:
     """Each driver gets an email listing today's trips, 90 minutes before their first pickup."""
     from app.modules.notifications.jobs import run_daily_manifests
     return run_daily_manifests()
+
+@celery_app.task
+def purge_driver_positions() -> dict[str, int]:
+    """Nightly: delete driver positions older than LOCATION_RETENTION_DAYS."""
+    from app.modules.realtime.jobs import run_purge_positions
+    return run_purge_positions()

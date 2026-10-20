@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import AwareDatetime, BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, Field, model_validator
 
 from app.core.permissions import Role
 from app.modules.trips.state import TripStatus
@@ -35,6 +35,12 @@ class LocationPing(BaseModel):
     accuracy_m: float | None = Field(default=None, ge=0)
     recorded_at: AwareDatetime | None = None  # device time of the fix; server time when omitted
 
+    @model_validator(mode="after")
+    def _not_null_island(self) -> "LocationPing":
+        if self.lat == 0 and self.lng == 0:  # what many devices report when they have NO fix
+            raise ValueError("0,0 is not a real position")
+        return self
+
 
 class LocationIn(LocationPing):
     type: Literal["location"]
@@ -49,6 +55,13 @@ class AuthOk(BaseModel):
 
 class AuthErr(BaseModel):
     type: Literal["auth_err"] = "auth_err"
+    detail: str
+
+
+class LocationRejected(BaseModel):
+    """A location message was refused (e.g. the driver is off duty); the device should say so."""
+
+    type: Literal["location_rejected"] = "location_rejected"
     detail: str
 
 
@@ -87,6 +100,15 @@ class TripChangedEvent(BaseModel):
     type: Literal["trip.changed"] = "trip.changed"
     trip_id: UUID
     change: str  # assigned | unassigned | ...
+    at: datetime
+
+
+class DriverDutyEvent(BaseModel):
+    """A driver changed their availability (to dispatchers)."""
+
+    type: Literal["driver.duty"] = "driver.duty"
+    driver_id: UUID
+    duty_status: str
     at: datetime
 
 

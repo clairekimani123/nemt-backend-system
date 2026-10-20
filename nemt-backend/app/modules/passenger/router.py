@@ -230,8 +230,10 @@ async def cancel_ride(trip_id: UUID, request: Request, user: User = PASSENGER, d
     trips.apply_transition(db, trip, TripStatus.CANCELLED, user.id, body, by_driver=False)
     await audit.record(db, action="trip.status", actor=user, resource_type="trip", resource_id=trip.id,
                        request=request, meta={"to": "cancelled", "by": "passenger"})
-    await rt.trip_status_changed(trip.company_id, trip.id, TripStatus.CANCELLED, trip.driver_id, trip.vehicle_id)
+    driver_user, _ = await trips.trip_user_ids(db, trip.company_id, trip.driver_id, None)
     await db.commit()
+    await rt.trip_status_changed(trip.company_id, trip.id, TripStatus.CANCELLED, trip.driver_id, trip.vehicle_id)
+    await rt.trip_changed_for_users(trip.company_id, [driver_user], trip.id, "status")
     return await _own_trip(db, user, patient, trip_id)
 
 

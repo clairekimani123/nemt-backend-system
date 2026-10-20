@@ -46,14 +46,18 @@ def utcnow() -> datetime:
 def _encode(sub: UUID, typ: str, minutes: int, **extra: str) -> str:
     now = utcnow()
     payload = {
-        "sub": str(sub), "typ": typ, "iss": settings.jwt_issuer, "jti": secrets.token_hex(8),
+        "sub": str(sub), "typ": typ, "iss": settings.jwt_issuer, "aud": settings.jwt_audience,
+        "jti": secrets.token_hex(8),
         "iat": now, "exp": now + timedelta(minutes=minutes), **extra,
     }
     return jwt.encode(payload, settings.jwt_secret.get_secret_value(), algorithm="HS256")
 
 
-def create_access_token(user_id: UUID, company_id: UUID, role: str) -> str:
-    return _encode(user_id, "access", settings.access_token_minutes, cid=str(company_id), role=role)
+def create_access_token(user_id: UUID, company_id: UUID, role: str, session_id: UUID) -> str:
+    """`sid` is the login session (refresh-token family) the token was issued for: the API
+    refuses the token as soon as that session is signed out or revoked, not only at `exp`."""
+    return _encode(user_id, "access", settings.access_token_minutes, cid=str(company_id), role=role,
+                   sid=str(session_id))
 
 
 def create_mfa_token(user_id: UUID, company_id: UUID) -> str:
@@ -67,7 +71,8 @@ def decode_token(token: str, typ: str) -> dict:
     try:
         claims = jwt.decode(
             token, settings.jwt_secret.get_secret_value(), algorithms=["HS256"],
-            issuer=settings.jwt_issuer, options={"require": ["exp", "iat", "sub", "typ"]},
+            issuer=settings.jwt_issuer, audience=settings.jwt_audience,
+            options={"require": ["exp", "iat", "sub", "typ", "aud"]},
         )
     except jwt.PyJWTError:
         raise unauthorized from None

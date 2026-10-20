@@ -32,7 +32,7 @@ async def test_overview_and_company_users(client, super_token):
     assert off.status_code == 200 and off.json()["is_active"] is False
     r = await client.post("/auth/login", headers={"X-Tenant": "alpha"},
                           json={"email": "second-admin@alpha.example.com", "password": PW})
-    assert r.status_code == 401
+    assert r.status_code == 403 and "deactivated" in r.json()["detail"]  # correct password: told why
 
 
 async def test_company_deactivation_blocks_its_logins(client, super_token):

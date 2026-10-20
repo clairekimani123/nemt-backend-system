@@ -5,6 +5,7 @@ from uuid import UUID
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.core.address import AddressIn
+from app.modules.drivers.models import DutyStatus
 from app.modules.patients.models import MobilityType
 from app.modules.vehicles.models import VehicleType
 from app.modules.trips.recurrence import validate_rrule
@@ -228,6 +229,51 @@ class DriverTripOut(BaseModel):
     vehicle_unit: str | None
     passenger_response: PassengerResponse | None
     is_late: bool
+    requested_at: datetime            # when the booking/request was made
+    assigned_at: datetime | None      # when it was given to this driver
+
+
+class DriverDeclineIn(BaseModel):
+    reason: str = Field(min_length=3, max_length=300)
+
+
+class DutyIn(BaseModel):
+    duty_status: DutyStatus
+
+
+class DriverMeOut(BaseModel):
+    """The driver dashboard header: who am I, for which company, and my availability."""
+
+    driver_id: UUID
+    user_id: UUID
+    full_name: str
+    email: str
+    phone: str | None
+    has_avatar: bool
+    avatar_updated_at: datetime | None
+    company_name: str
+    company_timezone: str
+    employee_number: str | None
+    wheelchair_certified: bool
+    duty_status: DutyStatus
+    duty_changed_at: datetime | None
+    on_trip: bool                     # derived: a trip of mine is under way right now
+    today: date                       # the company's local date
+
+
+class DriverStatsOut(BaseModel):
+    """Counts straight from the trips table for the company's local day and the 7 days before it."""
+
+    today: date
+    today_total: int
+    today_remaining: int
+    today_completed: int
+    today_cancelled: int
+    today_no_show: int
+    week_completed: int
+    week_cancelled: int
+    week_no_show: int
+    upcoming: int                     # assigned to me after today
 
 
 # ---------------------------------------------------------------- recurring

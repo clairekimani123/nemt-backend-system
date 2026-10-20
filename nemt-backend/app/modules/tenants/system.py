@@ -12,13 +12,14 @@ import shutil
 from pathlib import Path
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select, text
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.crud import contains_pattern
 from app.core.db import is_lock_conflict
 from app.core.deps import get_db, require_permission
 from app.core.permissions import Permission, Role
@@ -26,6 +27,7 @@ from app.core.security import hash_password, verify_password
 from app.core.types import Email, Password
 from app.modules.audit import service as audit
 from app.modules.audit.models import AuditLog
+from app.modules.auth import service as auth
 from app.modules.auth.service import get_user_by_email, revoke_user_sessions
 from app.modules.drivers.models import Driver
 from app.modules.patients.models import Patient
@@ -33,7 +35,7 @@ from app.modules.realtime.manager import manager
 from app.modules.tenants.models import Company
 from app.modules.trips.models import Trip
 from app.modules.users.models import User
-from app.modules.users.schemas import UserOut
+from app.modules.users.schemas import AdminPasswordResetIn, AdminPasswordResetOut, StepUpIn, UserOut
 from app.modules.vehicles.models import Vehicle
 
 log = logging.getLogger(__name__)
@@ -159,12 +161,74 @@ async def update_company_user(company_id: UUID, user_id: UUID, body: PlatformUse
     for k, v in changes.items():
         setattr(target, k, v)
     if changes.get("is_active") is False:
-        await revoke_user_sessions(db, target.id)
+        await revoke_user_sessions(db, target)
     await audit.record(db, action="platform.user_updated", actor=actor, company_id=company_id,
                        resource_type="user", resource_id=target.id, request=request,
                        meta={"fields": sorted(changes)})
     await db.commit()
     return target
+
+
+# ======================================================================= users across companies
+class PlatformUserOut(UserOut):
+    company_name: str
+    company_slug: str
+
+
+@router.get("/users", response_model=list[PlatformUserOut])
+async def search_users(
+    q: str | None = Query(None, max_length=100, description="Search name or email"),
+    company_id: UUID | None = None, role: Role | None = None,
+    limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0),
+    _: User = SUPER, db: AsyncSession = Depends(get_db),
+):
+    """Find a user in ANY company (Super Admin support desk). Platform-context session: RLS bypass
+    is granted only after get_current_user confirmed the caller's Super Admin role from the DB."""
+    stmt = select(User, Company.name, Company.slug).join(Company, Company.id == User.company_id)
+    if q and q.strip():
+        like = contains_pattern(q)
+        stmt = stmt.where(or_(User.full_name.ilike(like), User.email.ilike(like)))
+    if company_id:
+        stmt = stmt.where(User.company_id == company_id)
+    if role:
+        stmt = stmt.where(User.role == role)
+    rows = (await db.execute(stmt.order_by(Company.name, User.full_name, User.id).limit(limit).offset(offset))).all()
+    return [PlatformUserOut(**UserOut.model_validate(u).model_dump(), company_name=n, company_slug=sl)
+            for u, n, sl in rows]
+
+
+async def _any_user(db: AsyncSession, company_id: UUID, user_id: UUID) -> User:
+    target = await db.scalar(select(User).where(User.id == user_id, User.company_id == company_id))
+    if target is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+    return target
+
+
+@router.post("/companies/{company_id}/users/{user_id}/password-reset", response_model=AdminPasswordResetOut)
+async def reset_any_password(company_id: UUID, user_id: UUID, body: AdminPasswordResetIn, request: Request,
+                             actor: User = SUPER, db: AsyncSession = Depends(get_db)):
+    """Cross-company password help, including for a Company Administrator who lost access."""
+    target = await _any_user(db, company_id, user_id)
+    auth.check_reset_authority(actor, target)
+    await auth.verify_actor_password(db, actor, body.admin_password, request, "password_reset")
+    queued = await auth.admin_reset_password(db, actor, target, mode=body.mode,
+                                             temporary_password=body.temporary_password, request=request)
+    return AdminPasswordResetOut(mode=body.mode, email_queued=queued,
+                                 must_change_password=body.mode == "temporary_password")
+
+
+@router.post("/companies/{company_id}/users/{user_id}/sessions/revoke", status_code=status.HTTP_204_NO_CONTENT)
+async def revoke_any_sessions(company_id: UUID, user_id: UUID, body: StepUpIn, request: Request,
+                              actor: User = SUPER, db: AsyncSession = Depends(get_db)):
+    target = await _any_user(db, company_id, user_id)
+    if target.id == actor.id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Sign out from My account instead")
+    await auth.verify_actor_password(db, actor, body.admin_password, request, "revoke_sessions")
+    await revoke_user_sessions(db, target)
+    await audit.record(db, action="platform.user_sessions_revoked", actor=actor, company_id=company_id,
+                       resource_type="user", resource_id=target.id, request=request)
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 # ======================================================================= super admins
@@ -203,7 +267,7 @@ async def set_super_admin_active(user_id: UUID, body: PlatformUserUpdate, reques
         raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
     target.is_active = body.is_active
     if not body.is_active:
-        await revoke_user_sessions(db, target.id)
+        await revoke_user_sessions(db, target)
     await audit.record(db, action="platform.super_admin_updated", actor=actor, resource_type="user",
                        resource_id=target.id, request=request, meta={"is_active": body.is_active})
     await db.commit()

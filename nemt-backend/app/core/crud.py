@@ -26,3 +26,8 @@ async def flush_or_409(db: AsyncSession, detail: str) -> None:
 class Page:
     def __init__(self, limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0)):
         self.limit, self.offset = limit, offset
+
+def contains_pattern(term: str) -> str:
+    """ILIKE pattern for 'contains term', with the user's % and _ taken literally."""
+    escaped = term.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
