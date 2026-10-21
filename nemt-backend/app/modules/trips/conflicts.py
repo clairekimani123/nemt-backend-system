@@ -20,6 +20,7 @@ from app.modules.patients.models import MobilityType
 from app.modules.trips.models import Trip
 from app.modules.trips.state import OCCUPYING
 from app.modules.vehicles.models import Vehicle, VehicleStatus
+from app.modules.fleet.models import VehicleMaintenance
 
 WHEELCHAIR = {MobilityType.WHEELCHAIR_MANUAL, MobilityType.WHEELCHAIR_POWER}
 SOON_DAYS = 14  # a document expiring within this many days of the trip gets a warning
@@ -116,6 +117,17 @@ async def check_assignment(
     _expiry(r, "Driver's medical card", "driver_medical_cert", driver.medical_cert_expires_on, trip_date)
     _expiry(r, f"Vehicle {vehicle.unit_number} registration", "vehicle_registration", vehicle.registration_expires_on, trip_date)
     _expiry(r, f"Vehicle {vehicle.unit_number} insurance", "vehicle_insurance", vehicle.insurance_expires_on, trip_date)
+
+    # Maintenance due within 7 days (warning only — doesn't block)
+    latest = await db.scalar(select(VehicleMaintenance).where(
+        VehicleMaintenance.company_id == vehicle.company_id,
+        VehicleMaintenance.vehicle_id == vehicle.id,
+    ).order_by(VehicleMaintenance.service_date.desc()).limit(1))
+    if latest and latest.next_due_date:
+        days_until = (latest.next_due_date - trip_date).days
+        if days_until <= 7:
+            r.warnings.append(Issue("maintenance_due_soon",
+                                    f"Vehicle {vehicle.unit_number} maintenance due {latest.next_due_date}"))
 
     # --- 4. is anyone already busy? -----------------------------------------------------------
     buf = timedelta(minutes=settings.trip_buffer_minutes)

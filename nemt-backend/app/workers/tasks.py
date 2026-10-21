@@ -27,3 +27,13 @@ def send_daily_driver_manifests() -> dict[str, int]:
     """Each driver gets an email listing today's trips, 90 minutes before their first pickup."""
     from app.modules.notifications.jobs import run_daily_manifests
     return run_daily_manifests()
+
+
+@celery_app.task
+def send_fleet_expiry_digest() -> dict[str, int]:
+    """Nightly: email the fleet_manager about vehicles whose docs expire soon.
+
+    Groups by company, sends one email per company that has any expiring items.
+    """
+    from app.modules.fleet.jobs import run_fleet_expiry_digest
+    return run_fleet_expiry_digest()

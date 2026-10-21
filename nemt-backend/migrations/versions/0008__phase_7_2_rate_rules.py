@@ -25,7 +25,7 @@ def upgrade() -> None:
         sa.Column("mobility", sa.String(length=32), nullable=True),
         sa.Column("weekday_mask", sa.Integer(), nullable=True),
         sa.Column("kind", sa.Enum("flat", "multiplier", name="rate_rule_kind",
-                                  native_enum=False, create_constraint=True, length=16), nullable=False),
+                                  native_enum=False, create_constraint=True, length=32), nullable=False),
         sa.Column("amount_cents", sa.Integer(), nullable=True),
         sa.Column("multiplier_bp", sa.Integer(), nullable=True),
         sa.Column("id", sa.Uuid(), nullable=False),

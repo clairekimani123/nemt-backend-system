@@ -58,10 +58,10 @@ def upgrade() -> None:
         sa.Column("rate_plan_id", sa.Uuid(), nullable=True),
         sa.Column("claim_number", sa.String(length=32), nullable=False),
         sa.Column("status", sa.Enum("draft", "submitted", "paid", "partial", "denied", "written_off", "void",
-                                    name="claim_status", native_enum=False, create_constraint=True, length=16),
+                                    name="claim_status", native_enum=False, create_constraint=True, length=32),
                   nullable=False),
         sa.Column("payer_type", sa.Enum("medicaid", "medicare", "private_insurance", "facility", "patient", "broker",
-                                        name="claim_payer_type", native_enum=False, create_constraint=True, length=24),
+                                        name="claim_payer_type", native_enum=False, create_constraint=True, length=32),
                   nullable=False),
         sa.Column("service_date", sa.Date(), nullable=False),
         sa.Column("place_of_service_code", sa.String(length=4), nullable=True),
@@ -103,7 +103,7 @@ def upgrade() -> None:
         sa.Column("id", sa.BigInteger(), sa.Identity(always=False), nullable=False),
         sa.Column("claim_id", sa.Uuid(), nullable=False),
         sa.Column("kind", sa.Enum("payment", "adjustment", "denial", name="claim_payment_kind",
-                                  native_enum=False, create_constraint=True, length=16), nullable=False),
+                                  native_enum=False, create_constraint=True, length=32), nullable=False),
         sa.Column("amount_cents", sa.Integer(), nullable=False),
         sa.Column("posted_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.Column("reference", sa.String(length=64), nullable=True),
@@ -149,3 +149,24 @@ def upgrade() -> None:
 
     grant("SELECT, INSERT, UPDATE", "rate_plans", "claims")
     grant("SELECT, INSERT", "claim_payments", "claim_lines")   # append-only
+
+
+
+def downgrade() -> None:
+    op.drop_index(op.f("ix_claim_lines_company_id"), table_name="claim_lines")
+    op.drop_table("claim_lines")
+
+    op.drop_index(op.f("ix_claim_payments_company_id"), table_name="claim_payments")
+    op.drop_index("ix_claim_payments_claim", table_name="claim_payments")
+    op.drop_table("claim_payments")
+
+    op.drop_index(op.f("ix_claims_company_id"), table_name="claims")
+    op.drop_index("ix_claims_company_submitted", table_name="claims")
+    op.drop_index("ix_claims_company_service", table_name="claims")
+    op.drop_index("ix_claims_company_status", table_name="claims")
+    op.drop_table("claims")
+
+    op.drop_index(op.f("ix_rate_plans_company_id"), table_name="rate_plans")
+    op.drop_index("ix_rate_plans_company_effective", table_name="rate_plans")
+    op.drop_index("ix_rate_plans_company_broker", table_name="rate_plans")
+    op.drop_table("rate_plans")

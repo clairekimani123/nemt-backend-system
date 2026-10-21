@@ -28,6 +28,11 @@ celery_app.conf.update(
             "schedule": crontab(hour=5, minute=0),   # 05:00 UTC
         },
 
+        "send-fleet-expiry-digest": {
+            "task": "app.workers.tasks.send_fleet_expiry_digest",
+            "schedule": crontab(hour=4, minute=30),   # 04:30 UTC, before the early shift
+        },
+
             
     },
 )
