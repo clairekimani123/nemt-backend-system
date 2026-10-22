@@ -6,17 +6,18 @@ in the company's local timezone so a "day" means the operator's day, not UTC's.
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import date, datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import and_, case, desc, func, or_, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.crud import get_or_404
-from app.modules.billing.models import Claim, ClaimStatus
+# from app.core.crud import get_or_404
+from app.modules.billing.models import Claim
 from app.modules.drivers.models import Driver
 from app.modules.fleet.models import VehicleMaintenance
-from app.modules.patients.models import MobilityType
+
+# from app.modules.patients.models import MobilityType
 from app.modules.reporting.schemas import (
     BreakdownRow,
     CancellationReport,
@@ -108,7 +109,7 @@ async def on_time_report(db: AsyncSession, company_id: UUID,
 
     # Aggregate by driver (and overall)
     by_driver: dict[UUID | None, dict] = {}
-    for trip_id, driver_id, scheduled, arrived in rows:
+    for _trip_id, driver_id, scheduled, arrived in rows:
         if arrived is None:
             continue
         delta = (arrived - scheduled).total_seconds() / 60

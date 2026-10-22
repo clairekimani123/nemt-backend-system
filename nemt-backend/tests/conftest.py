@@ -95,3 +95,21 @@ async def super_token(client) -> str:
 #     finally:
 #         loop.close()
 #     return c, super_token
+
+
+@pytest_asyncio.fixture
+async def seeded_templates(client, super_token):
+    """Fixture that creates a company with the standard notification templates seeded."""
+    from tests.helpers import make_company, bearer
+    c = await make_company(client, super_token, "templates_co")
+    for event, subject, body in [
+        ("ops.daily_summary", "{{subject}}", "{{body}}"),
+        ("trip.assigned.driver", "New trip", "Hi {{driver_name}}, trip {{trip_ref}}"),
+        ("trip.en_route.patient", "On the way", "Hi {{patient_first_name}}"),
+    ]:
+        await client.post("/notifications/templates", headers=c["admin_headers"], json={
+            "event": event, "channel": "email", "subject": subject, "body": body,
+        })
+    return c
+
+

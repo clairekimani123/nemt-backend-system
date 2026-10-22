@@ -19,17 +19,21 @@ from pydantic import ValidationError
 from sqlalchemy import select
 
 from app.core.db import open_tenant_session
+from app.core.geo import point
 from app.core.permissions import Role
 from app.core.security import decode_token
 from app.modules.drivers.models import Driver
 from app.modules.realtime import publisher
 from app.modules.realtime.manager import manager
-from app.modules.realtime.schemas import (
-    AuthErr, AuthIn, AuthOk, LocationIn, PingIn, Pong,
-)
 from app.modules.realtime.models import DriverPosition
+from app.modules.realtime.schemas import (
+    AuthErr,
+    AuthIn,
+    AuthOk,
+    LocationIn,
+    Pong,
+)
 from app.modules.users.models import User
-from app.core.geo import point
 
 log = logging.getLogger(__name__)
 router = APIRouter()

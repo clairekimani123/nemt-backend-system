@@ -12,7 +12,13 @@ from app.modules.audit import service as audit
 from app.modules.routing import service
 from app.modules.routing.models import Route, RoutePlan, RouteStatus
 from app.modules.routing.schemas import (
-    ApplyOut, EstimateIn, EstimateOut, GeometryOut, PlanOut, PlanRequest, RouteOut,
+    ApplyOut,
+    EstimateIn,
+    EstimateOut,
+    GeometryOut,
+    PlanOut,
+    PlanRequest,
+    RouteOut,
 )
 from app.modules.users.models import User
 

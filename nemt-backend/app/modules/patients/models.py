@@ -76,8 +76,9 @@ class Patient(IdMixin, TenantMixin, TimestampMixin, ArchiveMixin, Base):
               postgresql_where=text("user_id IS NOT NULL")),
         Index("ix_patients_company_last_name", "company_id", "last_name"),
         # fast "%smi%" name search (pg_trgm)
-        Index("ix_patients_name_trgm", text("(lower(first_name || ' ' || last_name)) gin_trgm_ops"),
-              postgresql_using="gin"),
+        Index("ix_patients_name_trgm", text("(lower(first_name || ' ' || last_name))"),
+      postgresql_using="gin",
+      postgresql_ops={"lower(first_name || ' ' || last_name)": "gin_trgm_ops"})
     )
 
 

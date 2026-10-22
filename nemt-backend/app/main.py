@@ -8,12 +8,19 @@ from app.core.config import settings
 from app.core.db import SessionLocal, engine
 from app.modules.audit.router import router as audit_router
 from app.modules.auth.router import router as auth_router
+from app.modules.billing.router import router as billing_router
 from app.modules.compliance.router import router as compliance_router
 from app.modules.documents.router import router as documents_router
 from app.modules.drivers.router import router as drivers_router
 from app.modules.facilities.router import brokers_router
 from app.modules.facilities.router import router as facilities_router
+from app.modules.fleet.router import router as fleet_router
+from app.modules.notifications.router import router as notifications_router
 from app.modules.patients.router import router as patients_router
+from app.modules.realtime.ws import router as realtime_router
+from app.modules.reporting.router import router as reports_router
+from app.modules.routing.driver_route import router as driver_route_router
+from app.modules.routing.router import router as routing_router
 from app.modules.tenants.router import router as platform_router
 from app.modules.trips.driver_router import router as driver_app_router
 from app.modules.trips.recurring_router import router as recurring_router
@@ -21,13 +28,6 @@ from app.modules.trips.router import board_router
 from app.modules.trips.router import router as trips_router
 from app.modules.users.router import router as users_router
 from app.modules.vehicles.router import router as vehicles_router
-from app.modules.routing.driver_route import router as driver_route_router
-from app.modules.routing.router import router as routing_router
-from app.modules.realtime.ws import router as realtime_router
-from app.modules.notifications.router import router as notifications_router
-from app.modules.billing.router import router as billing_router
-from app.modules.fleet.router import router as fleet_router
-from app.modules.reporting.router import router as reports_router
 
 
 @asynccontextmanager

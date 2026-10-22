@@ -36,7 +36,9 @@ class Facility(IdMixin, TenantMixin, TimestampMixin, ArchiveMixin, AddressMixin,
         UniqueConstraint("company_id", "id", name="uq_facilities_company_id_id"),
         Index("ix_facilities_company_name", "company_id", "name"),
         Index("ix_facilities_location", "location", postgresql_using="gist"),
-        Index("ix_facilities_name_trgm", text("(lower(name)) gin_trgm_ops"), postgresql_using="gin"),
+        Index("ix_facilities_name_trgm", text("lower(name)"),
+      postgresql_using="gin",
+      postgresql_ops={"lower(name)": "gin_trgm_ops"})
     )
 
 

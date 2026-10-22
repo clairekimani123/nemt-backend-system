@@ -16,15 +16,15 @@ from sqlalchemy import (
     CheckConstraint,
     Date,
     DateTime,
-    ForeignKey,
+    # ForeignKey,
     ForeignKeyConstraint,
     Index,
     Integer,
     SmallInteger,
     String,
     UniqueConstraint,
-    func,
-    text,
+    # func,
+    # text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column

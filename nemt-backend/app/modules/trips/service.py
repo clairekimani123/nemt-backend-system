@@ -20,7 +20,10 @@ from app.core.security import decrypt_field, encrypt_field
 from app.modules.audit import service as audit
 from app.modules.drivers.models import Driver
 from app.modules.facilities.models import Broker, Facility
+from app.modules.notifications import service as notifier
+from app.modules.notifications.models import Channel as NotifyChannel
 from app.modules.patients.models import Patient, PatientAddress
+from app.modules.realtime import publisher as rt
 from app.modules.tenants.models import Company
 from app.modules.trips import conflicts
 from app.modules.trips.models import RecurringTrip, Trip, TripEvent
@@ -54,9 +57,6 @@ from app.modules.trips.state import (
 )
 from app.modules.users.models import User
 from app.modules.vehicles.models import Vehicle
-from app.modules.realtime import publisher as rt
-from app.modules.notifications.models import Channel as NotifyChannel
-from app.modules.notifications import service as notifier
 
 S = TripStatus
 

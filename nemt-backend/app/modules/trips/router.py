@@ -9,6 +9,7 @@ from app.core.config import settings
 from app.core.crud import Page, get_or_404
 from app.core.deps import get_db, require_permission
 from app.core.permissions import Permission
+from app.core.phi_audit import audit_phi_read
 from app.modules.audit import service as audit
 from app.modules.trips import service
 from app.modules.trips.models import Trip, TripEvent
@@ -92,22 +93,41 @@ async def list_trips(
 
 @router.get("/{trip_id}", response_model=TripOut)
 async def get_trip(trip_id: UUID, request: Request, actor: User = READ, db: AsyncSession = Depends(get_db)):
-    await get_or_404(db, Trip, trip_id, actor.company_id, "Trip")
-    await audit.record(db, action="trip.read", actor=actor, resource_type="trip", resource_id=trip_id, request=request)
+    trip = await get_or_404(db, Trip, trip_id, actor.company_id, "Trip")
+    # PHI audit (HIPAA)
+    await audit_phi_read(
+        db, actor_user_id=actor.id, company_id=actor.company_id,
+        resource_type="trip", resource_id=trip.id,
+        patient_id=trip.patient_id,
+        request=request,
+    )
+    # Operational audit (who viewed this trip, in the dispatcher's trail)
+    await audit.record(db, action="trip.read", actor=actor, resource_type="trip",
+    resource_id=trip.id, request=request)
     await db.commit()
     return await _one(db, actor, trip_id)
 
 
 @router.get("/{trip_id}/events", response_model=list[TripEventOut])
-async def trip_history(trip_id: UUID, actor: User = READ, db: AsyncSession = Depends(get_db)):
-    await get_or_404(db, Trip, trip_id, actor.company_id, "Trip")
-    return (await db.scalars(select(TripEvent).where(TripEvent.trip_id == trip_id, TripEvent.company_id == actor.company_id)
-                             .order_by(TripEvent.id))).all()
-
+async def trip_history(trip_id: UUID, request: Request, actor: User = READ,
+    db: AsyncSession = Depends(get_db)):
+    trip = await get_or_404(db, Trip, trip_id, actor.company_id, "Trip")
+    await audit_phi_read(
+        db, actor_user_id=actor.id, company_id=actor.company_id,
+        resource_type="trip", resource_id=trip.id,
+        patient_id=trip.patient_id, request=request,
+    )
+    await audit.record(db, action="trip.read", actor=actor, resource_type="trip",
+    resource_id=trip.id, request=request, meta={"view": "events"})
+    await db.commit()
+    return (await db.scalars(
+        select(TripEvent).where(TripEvent.trip_id == trip_id,
+        TripEvent.company_id == actor.company_id)
+        .order_by(TripEvent.id))).all()
 
 @router.patch("/{trip_id}", response_model=TripOut)
 async def update_trip(trip_id: UUID, body: TripUpdate, request: Request, actor: User = WRITE,
-                      db: AsyncSession = Depends(get_db)):
+    db: AsyncSession = Depends(get_db)):
     await service.update_trip(db, actor, trip_id, body, request)
     return await _one(db, actor, trip_id)
 
@@ -168,7 +188,8 @@ async def board(on_date: date, actor: User = READ, db: AsyncSession = Depends(ge
 async def live_positions(actor: User = READ, db: AsyncSession = Depends(get_db)):
     """The last known position of every driver who has reported in the last 30 minutes."""
     from datetime import timedelta
-    from sqlalchemy import func as _f, text as _t
+
+    from sqlalchemy import text as _t
     cutoff = datetime.now(UTC) - timedelta(minutes=30)
     # newest position per driver, tenant-scoped by RLS
     rows = (await db.execute(_t("""

@@ -1,6 +1,5 @@
 """Fleet endpoints: maintenance, inspections, mileage, and the dashboard."""
 
-from datetime import date
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request, status
@@ -12,8 +11,13 @@ from app.core.permissions import Permission
 from app.modules.fleet import service
 from app.modules.fleet.models import VehicleInspection, VehicleMaintenance, VehicleMileage
 from app.modules.fleet.schemas import (
-    InspectionIn, InspectionOut, MaintenanceIn, MaintenanceOut,
-    MileageIn, MileageOut, VehicleFleetStatus,
+    InspectionIn,
+    InspectionOut,
+    MaintenanceIn,
+    MaintenanceOut,
+    MileageIn,
+    MileageOut,
+    VehicleFleetStatus,
 )
 from app.modules.users.models import User
 

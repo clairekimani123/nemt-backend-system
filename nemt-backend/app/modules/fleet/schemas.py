@@ -4,7 +4,9 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.modules.fleet.models import (
-    InspectionKind, InspectionResult, MaintenanceKind,
+    InspectionKind,
+    InspectionResult,
+    MaintenanceKind,
 )
 
 

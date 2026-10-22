@@ -4,14 +4,17 @@ from datetime import UTC, date, datetime, timedelta
 from uuid import UUID
 
 from fastapi import HTTPException, Request
-from sqlalchemy import and_, desc, func, select
+from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.base import new_id
 from app.core.crud import get_or_404
 from app.modules.audit import service as audit
 from app.modules.fleet.models import (
-    InspectionResult, VehicleInspection, VehicleMaintenance, VehicleMileage,
+    InspectionResult,
+    VehicleInspection,
+    VehicleMaintenance,
+    VehicleMileage,
 )
 from app.modules.fleet.schemas import (
     VehicleFleetStatus,

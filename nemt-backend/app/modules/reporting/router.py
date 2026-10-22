@@ -9,9 +9,14 @@ from app.core.deps import get_db, require_permission
 from app.core.permissions import Permission
 from app.modules.reporting import service
 from app.modules.reporting.schemas import (
-    CancellationReport, DriverUtilizationReport, LeaderboardReport,
-    NoShowReport, OnTimeReport, RevenueProductivityOut,
-    VehicleUtilizationReport, VolumeReport,
+    CancellationReport,
+    DriverUtilizationReport,
+    LeaderboardReport,
+    NoShowReport,
+    OnTimeReport,
+    RevenueProductivityOut,
+    VehicleUtilizationReport,
+    VolumeReport,
 )
 from app.modules.users.models import User
 

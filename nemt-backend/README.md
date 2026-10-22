@@ -269,7 +269,7 @@ The API exposes a WebSocket at `/ws`. Two things flow over it:
 - **Server → dispatchers:** every trip status change (`trip.status`), every assignment
   (`trip.assigned`), and every driver position (`driver.position`) in their tenant.
 
-### Handshake
+## Handshake
 
 ```js
 const ws = new WebSocket("wss://api.example.com/ws");
@@ -281,7 +281,7 @@ ws.onmessage = (ev) => {
   if (msg.type === "driver.position") { /* update the map */ }
 };
 
-## Notifications
+##Notifications
 
 Events become messages. `trip.assigned.driver`, `trip.en_route.patient`,
 `trip.reminder.patient`, `driver.manifest.daily` — each has a template per
@@ -447,3 +447,108 @@ billing-smoke:
 	@echo ""
 	@echo "=== end-to-end pipeline ==="
 	python -m pytest tests/test_billing_e2e.py -q
+
+
+### Reports.
+
+Operational reporting endpoints. All read-only, all tenant-scoped, all accept
+`?from=YYYY-MM-DD&to=YYYY-MM-DD` (inclusive). Missing either bound defaults to the
+last 7 days.
+
+| Endpoint | Answers |
+|---|---|
+| `GET /reports/on-time` | Are pickups happening when promised? Overall and per-driver. |
+| `GET /reports/cancellations` | What's cancelled, by reason, and how many were late. |
+| `GET /reports/no-shows` | How many no-shows, and by which drivers. |
+| `GET /reports/volume` | Trips per day, by mobility type, by source. |
+| `GET /reports/utilization/drivers` | Of each driver's active hours, how much was spent driving? |
+| `GET /reports/utilization/vehicles` | Same shape, per vehicle, plus maintenance cost. |
+| `GET /reports/revenue-productivity` | Billed, paid, revenue per trip, revenue per km, paid rate. |
+| `GET /reports/leaderboard` | Top drivers by completed trips. |
+
+### Design notes
+
+- **Local day boundaries.** A trip that started at 23:55 local on Monday counts for Monday,
+  not Tuesday. Uses the same `company_tz` + `day_bounds` helper that trips use.
+- **Basis points everywhere a rate is returned.** `on_time_rate_bp: 9473` is 94.73%.
+  No float ambiguity; comparisons and JSON round-trips are exact.
+- **On-demand aggregation.** Every request aggregates from `trips` and `claims`.
+  Fast up to ~50k trips/month. Beyond that, a `reporting_daily` materialized table would
+  be added in Phase 9.5 — not needed yet.
+- **No patient names in reports.** Driver names appear; patient names do not. Keeping PII
+  out of the operational dashboard also keeps it out of the operational reports, which
+  are often screenshotted and shared.
+
+### Nightly ops summary
+
+A Celery beat task (`send_daily_summaries`, 06:30 UTC) sends each company's staff
+(company_admin, dispatcher, billing_staff, fleet_manager) an email with yesterday's
+numbers. Content: total trips, on-time rate, cancellations by reason, no-shows,
+revenue billed / paid, and the top five drivers.
+
+Companies with zero trips yesterday receive no email. Silence is the "all clear."
+
+
+## Security
+
+The backend is designed for HIPAA-shaped workloads: patient identifiers, medical notes,
+and trip details are treated as PHI.
+
+### Access control
+
+- **Role-based**: every endpoint requires a specific permission. See `app/core/permissions.py`.
+- **Tenant-isolated**: PostgreSQL Row-Level Security on every PHI table. Even if the app
+  layer forgets a filter, the database returns zero rows.
+- **MFA**: enforced for `super_admin`, optional for other roles.
+- **Session management**: 15-minute access tokens, 14-day refresh tokens with rotation
+  and reuse detection. Force-logout via `POST /users/{id}/force-logout`.
+
+### Rate limiting
+
+Auth endpoints have Redis-backed sliding-window limits:
+
+| Endpoint | Limit | Window |
+|---|---|---|
+| `POST /auth/login` (per IP) | 20 | 60s |
+| `POST /auth/login` (per email) | 5 | 60s |
+| `POST /auth/register` (per IP) | 5 | 1h |
+| `POST /auth/password/forgot` (per IP) | 3 | 1h |
+| `POST /auth/mfa/login` (per IP) | 10 | 60s |
+
+Configurable via `RATE_LIMIT_*` env vars. Disabled when `ENV=test` to keep the test
+suite fast; one dedicated test verifies the limiter works.
+
+### Encryption
+
+- **Passwords**: Argon2id.
+- **PHI fields**: Fernet (AES-128-CBC + HMAC-SHA256) with `MultiFernet` for key rotation.
+- **Tokens**: SHA-256 hash stored, raw token only in transit.
+- **In transit**: TLS at the reverse proxy.
+
+### Audit
+
+- Every mutation: `audit_logs` row.
+- Every PHI read: `phi.read` row.
+- Append-only at the DB grant level (no UPDATE, no DELETE for the runtime role).
+- 6-year retention, purged nightly.
+
+### Data retention
+
+| Data | Retention |
+|---|---|
+| Audit logs | 6 years |
+| Patient records | 7 years after last service (Phase 11) |
+| Session tokens | 14 days (rotating) |
+| Password reset tokens | 30 minutes, single-use |
+
+### Documentation
+
+- `docs/key_rotation.md` — how to rotate field encryption keys
+- `docs/backup_restore.md` — backup cadence and restore procedure
+- `docs/hipaa_compliance.md` — one-page summary for auditors
+
+### Testing
+
+```bash
+make security-smoke
+Runs the auth, RBAC, tenant-isolation, audit, rate-limit, and PHI-audit test suites.

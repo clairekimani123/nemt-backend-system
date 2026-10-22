@@ -27,9 +27,8 @@ from reportlab.lib.pagesizes import letter
 from reportlab.lib.units import inch
 from reportlab.pdfgen import canvas
 
-from app.modules.billing.models import Claim, ClaimLine, PayerType
 from app.modules.billing.formats.edi import BillingProvider, Payer, Subscriber
-
+from app.modules.billing.models import Claim, ClaimLine, PayerType
 
 # Layout: each box is (x_pt, y_pt, width_pt, height_pt) from the TOP-LEFT of the page
 # The real CMS-1500 uses 100th-of-inch coordinates. We simplify by using inches directly
@@ -72,7 +71,7 @@ def render_cms1500(
     c.rect(0, 0, w, h, stroke=0, fill=1)
     c.setStrokeColor(colors.lightgrey)
     c.setLineWidth(0.5)
-    for name, (x, y, bw, bh) in BOXES.items():
+    for _name, (x, y, bw, bh) in BOXES.items():
         c.rect(x * inch, h - (y + bh) * inch, bw * inch, bh * inch, stroke=1, fill=0)
 
     # Helpers

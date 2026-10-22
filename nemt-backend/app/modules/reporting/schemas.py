@@ -9,8 +9,6 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
-from app.modules.patients.models import MobilityType
-
 
 # ------------------------------------------------------------------ shared
 class PeriodOut(BaseModel):
@@ -93,7 +91,7 @@ class UtilizationRow(BaseModel):
     active_days: int
     scheduled_hours: float                  # sum of assigned-trip durations
     driving_minutes: int                    # actual from trip_events (en_route → completed)
-    idle_minutes: int                       # active span − driving
+    idle_minutes: int                       # active span - driving
     utilization_bp: int                     # driving / active, in bp
 
 

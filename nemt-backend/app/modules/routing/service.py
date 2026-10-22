@@ -3,7 +3,7 @@
 import asyncio
 import math
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -22,14 +22,28 @@ from app.modules.routing import solver
 from app.modules.routing.models import PlanStatus, Route, RoutePlan, RouteStatus, RouteStop
 from app.modules.routing.providers import Matrix, Point, RoutingError, get_router, traffic_factor
 from app.modules.routing.schemas import (
-    AppointmentOut, EstimateOut, GeometryOut, LoadOut, PlanOut, PlanRequest, RouteOut,
-    SkippedResourceOut, StopOut, UnassignedOut,
+    AppointmentOut,
+    EstimateOut,
+    GeometryOut,
+    LoadOut,
+    PlanOut,
+    PlanRequest,
+    RouteOut,
+    SkippedResourceOut,
+    StopOut,
+    UnassignedOut,
 )
 from app.modules.trips import conflicts
 from app.modules.trips.models import Trip
 from app.modules.trips.schemas import DriverBrief, VehicleBrief
 from app.modules.trips.service import (
-    add_event, company_tz, day_bounds, lock_keys, lock_trip, patient_overlaps, place_out,
+    add_event,
+    company_tz,
+    day_bounds,
+    lock_keys,
+    lock_trip,
+    patient_overlaps,
+    place_out,
 )
 from app.modules.trips.state import EDITABLE, OCCUPYING, TripStatus
 from app.modules.users.models import User
@@ -157,7 +171,7 @@ async def create_plan(db: AsyncSession, actor: User, body: PlanRequest, request:
 
     ends = [(loc(t.pickup_latitude, t.pickup_longitude), loc(t.dropoff_latitude, t.dropoff_longitude))
             for t, _, _ in trips]
-    depot = loc(body.depot.latitude, body.depot.longitude) if body.depot else None
+    loc(body.depot.latitude, body.depot.longitude) if body.depot else None
     router_matrix = await _matrix(points) if points else Matrix([], [], get_router().name)
 
     factor = [1.0] * len(points)

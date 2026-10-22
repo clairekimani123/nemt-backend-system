@@ -5,8 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.modules.billing.models import ClaimStatus, PayerType, PaymentKind
-from app.modules.billing.models import RuleKind
+from app.modules.billing.models import ClaimStatus, PayerType, PaymentKind, RuleKind
 
 
 # ------------------------------------------------------------------ rate plans

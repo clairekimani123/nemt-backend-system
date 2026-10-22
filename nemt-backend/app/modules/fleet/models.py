@@ -15,12 +15,10 @@ Maintenance and inspections are historical facts: never updated, only appended t
 
 from datetime import date, datetime
 from enum import StrEnum
-from typing import Any
 from uuid import UUID
 
 from sqlalchemy import (
     BigInteger,
-    Boolean,
     CheckConstraint,
     Date,
     DateTime,
@@ -28,12 +26,10 @@ from sqlalchemy import (
     Identity,
     Index,
     Integer,
-    SmallInteger,
     String,
     Text,
     UniqueConstraint,
     func,
-    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 

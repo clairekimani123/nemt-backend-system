@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -90,3 +90,28 @@ async def update_user(
                        resource_id=target.id, request=request, meta={"fields": sorted(changes)})
     await db.commit()
     return target
+
+
+@router.post("/users/{user_id}/force-logout", status_code=status.HTTP_204_NO_CONTENT)
+async def force_logout(user_id: UUID, request: Request,
+                       actor: User = Depends(require_permission(Permission.USERS_WRITE)),
+                       db: AsyncSession = Depends(get_db)):
+    """Revoke every refresh token for this user. All devices must log in again."""
+    target = await db.scalar(select(User).where(User.id == user_id,
+                                               User.company_id == actor.company_id))
+    if target is None:
+        raise HTTPException(404, "User not found")
+    if target.id == actor.id:
+        raise HTTPException(400, "Use /auth/logout to log yourself out")
+    from app.core.security import utcnow
+    from app.modules.auth.models import RefreshToken
+    await db.execute(
+        update(RefreshToken)
+        .where(RefreshToken.user_id == target.id,
+               RefreshToken.revoked_at.is_(None))
+        .values(revoked_at=utcnow())
+    )
+    await audit.record(db, action="user.force_logout", actor=actor,
+                       resource_type="user", resource_id=target.id, request=request)
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

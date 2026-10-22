@@ -32,6 +32,17 @@ celery_app.conf.update(
             "task": "app.workers.tasks.send_fleet_expiry_digest",
             "schedule": crontab(hour=4, minute=30),   # 04:30 UTC, before the early shift
         },
+        "send-daily-summaries": {
+            "task": "app.workers.tasks.send_daily_summaries",
+            "schedule": crontab(hour=6, minute=30),   # 06:30 UTC daily
+        },
+        "purge-expired-audit-logs": {
+            "task": "app.workers.tasks.purge_expired_audit_logs",
+            "schedule": crontab(hour=3, minute=0),    # 03:00 UTC nightly
+        },
+
+
+
 
             
     },

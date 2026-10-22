@@ -16,11 +16,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.modules.drivers.models import Driver
+from app.modules.fleet.models import VehicleMaintenance
 from app.modules.patients.models import MobilityType
 from app.modules.trips.models import Trip
 from app.modules.trips.state import OCCUPYING
 from app.modules.vehicles.models import Vehicle, VehicleStatus
-from app.modules.fleet.models import VehicleMaintenance
 
 WHEELCHAIR = {MobilityType.WHEELCHAIR_MANUAL, MobilityType.WHEELCHAIR_POWER}
 SOON_DAYS = 14  # a document expiring within this many days of the trip gets a warning
@@ -171,7 +171,6 @@ def static_report(trip: Trip, driver: Driver, driver_active: bool, vehicle: Vehi
     Used by the solver's pre-pass to decide compatibility. The service layer runs the
     full check_assignment() before applying a plan.
     """
-    from datetime import date as _date
     r = Report()
     need = load_of(trip.mobility, trip.escort_count)
     if driver.archived_at is not None or not driver_active:

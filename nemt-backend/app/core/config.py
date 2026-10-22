@@ -21,6 +21,18 @@ class Settings(BaseSettings):
     mfa_token_minutes: int = 5
     password_reset_minutes: int = 30
 
+        # --- rate limiting ---
+        # --- rate limiting ---
+    rate_limit_login_ip_per_min: int = 20
+    rate_limit_login_email_per_min: int = 5
+    rate_limit_register_per_hour: int = 5
+    rate_limit_forgot_per_hour: int = 3
+    rate_limit_mfa_ip_per_min: int = 10
+    rate_limit_in_tests: bool = False       # set True in the rate-limit test only
+        # --- retention ---
+    audit_retention_days: int = 365 * 6        # 6 years per HIPAA
+    phi_retention_days: int = 365 * 7          # 7 years per typical state law
+
     field_encryption_keys: str  # comma-separated Fernet keys, newest first
     blind_index_key: SecretStr  # HMAC key for searchable-but-encrypted fields (e.g. Medicaid ID)
 
@@ -42,7 +54,7 @@ class Settings(BaseSettings):
     osrm_url: str = "http://localhost:5000"  # only used when routing_backend = "osrm"
     osrm_profile: str = "driving"
     osrm_timeout_s: int = 5
-    osrm_max_table_size: int = 100  # OSRM's --max-table-size (rows × cols per request)
+    osrm_max_table_size: int = 100  # OSRM's --max-table-size (rows x cols per request)
 
     # Haversine fallback (used when routing_backend = "haversine", and in tests)
     haversine_speed_kmh: float = 40.0    # average door-to-door speed for a mixed city fleet

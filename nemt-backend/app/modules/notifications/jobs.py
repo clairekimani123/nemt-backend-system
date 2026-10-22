@@ -9,8 +9,8 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import and_, select
 
-from app.core.config import settings
 from app.core.db import engine, open_tenant_session
+from app.modules.drivers.models import Driver
 from app.modules.notifications import service as notifier
 from app.modules.notifications.models import Channel
 from app.modules.patients.models import Patient
@@ -18,7 +18,6 @@ from app.modules.tenants.models import Company
 from app.modules.trips.models import Trip
 from app.modules.trips.state import TripStatus
 from app.modules.users.models import User
-from app.modules.drivers.models import Driver
 
 
 async def _companies():

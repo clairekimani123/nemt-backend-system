@@ -9,25 +9,32 @@ of this function, not by rewriting it.
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime
 from uuid import UUID
 
 from fastapi import HTTPException, Request
 from sqlalchemy import and_, or_, select, update
+from sqlalchemy import text as _text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.base import new_id
 from app.core.crud import get_or_404
 from app.modules.audit import service as audit
 from app.modules.billing.models import (
-    Claim, ClaimLine, ClaimPayment, ClaimStatus, PayerType, PaymentKind, RatePlan,
+    Claim,
+    ClaimLine,
+    ClaimPayment,
+    ClaimStatus,
+    PayerType,
+    PaymentKind,
+    RatePlan,
+    RateRule,
+    RuleKind,
 )
 from app.modules.billing.schemas import BillableTripOut, ClaimDetailOut, ClaimOut
 from app.modules.trips.models import Trip
 from app.modules.trips.state import TripStatus
 from app.modules.users.models import User
-from sqlalchemy import text as _text
-from app.modules.billing.models import RateRule, RuleKind 
 
 
 def _http(code: int, detail: object) -> HTTPException:

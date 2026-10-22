@@ -1,7 +1,11 @@
-from fastapi import APIRouter, Depends, Request, Response, status
+import hashlib
+
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.deps import get_current_user, get_db, get_tenant_db
+from app.core.ratelimit import hit
 from app.core.security import create_mfa_token
 from app.modules.auth import schemas, service
 from app.modules.users.models import User
@@ -11,25 +15,66 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 @router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
-async def register(body: schemas.RegisterIn, request: Request, db: AsyncSession = Depends(get_tenant_db)):
+async def register(body: schemas.RegisterIn, request: Request,
+                   db: AsyncSession = Depends(get_tenant_db)):
     """Passenger self-registration. Staff accounts are created by a Company Admin."""
+    ip = request.client.host if request.client else "?"
+    if not await hit(f"rl:register_ip:{ip}",
+                     settings.rate_limit_register_per_hour, 3600):
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            "Too many registration attempts from this IP",
+            headers={"Retry-After": "3600"},
+        )
     return await service.register_passenger(db, db.info["tenant_id"], body, request)
 
 
 @router.post("/login", response_model=schemas.LoginOut)
-async def login(body: schemas.LoginIn, request: Request, db: AsyncSession = Depends(get_tenant_db)):
+async def login(body: schemas.LoginIn, request: Request,
+                db: AsyncSession = Depends(get_tenant_db)):
     company_id = db.info["tenant_id"]
+
+    # per-IP rate limit: an attacker from one IP gets 20 attempts/minute
+    ip = request.client.host if request.client else "?"
+    if not await hit(f"rl:login_ip:{ip}", settings.rate_limit_login_ip_per_min, 60):
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            "Too many login attempts from this IP",
+            headers={"Retry-After": "60"},
+        )
+
+    # per-email rate limit: spraying across accounts from many IPs is stopped here
+    email_key = hashlib.sha256(body.email.lower().encode()).hexdigest()[:16]
+    if not await hit(f"rl:login_email:{email_key}",
+                     settings.rate_limit_login_email_per_min, 60):
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            "Too many login attempts for this account",
+            headers={"Retry-After": "60"},
+        )
+
     user = await service.authenticate(db, company_id, body.email, body.password, request)
     if user.mfa_enabled:
         await db.commit()
-        return schemas.LoginOut(mfa_required=True, mfa_token=create_mfa_token(user.id, company_id))
+        return schemas.LoginOut(mfa_required=True,
+                                 mfa_token=create_mfa_token(user.id, company_id))
     tokens = await service.complete_login(db, user, request)
     return schemas.LoginOut(**tokens.model_dump())
 
 
 @router.post("/mfa/login", response_model=schemas.TokenOut)
-async def mfa_login(body: schemas.MfaLoginIn, request: Request, db: AsyncSession = Depends(get_tenant_db)):
-    return await service.mfa_login(db, db.info["tenant_id"], body.mfa_token, body.code, request)
+async def mfa_login(body: schemas.MfaLoginIn, request: Request,
+                    db: AsyncSession = Depends(get_tenant_db)):
+    ip = request.client.host if request.client else "?"
+    if not await hit(f"rl:mfa_ip:{ip}",
+                     settings.rate_limit_mfa_ip_per_min, 60):
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            "Too many MFA attempts from this IP",
+            headers={"Retry-After": "60"},
+        )
+    return await service.mfa_login(db, db.info["tenant_id"], body.mfa_token,
+                                    body.code, request)
 
 
 @router.post("/refresh", response_model=schemas.TokenOut)

@@ -1,17 +1,16 @@
 """Nightly jobs for the fleet module."""
 
 import asyncio
-from datetime import date, timedelta
 
-from sqlalchemy import and_, select
+from sqlalchemy import select
 
 from app.core.db import engine, open_tenant_session
+from app.core.permissions import Role
 from app.modules.fleet import service as fleet
 from app.modules.notifications import service as notifier
 from app.modules.notifications.models import Channel
 from app.modules.tenants.models import Company
 from app.modules.users.models import User
-from app.core.permissions import Role
 
 
 async def _companies_with_fleet_managers():

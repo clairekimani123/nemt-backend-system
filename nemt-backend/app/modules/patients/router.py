@@ -9,6 +9,7 @@ from app.core.address import apply_address
 from app.core.crud import Page, flush_or_409, get_or_404
 from app.core.deps import get_db, require_permission
 from app.core.permissions import Permission, Role, has_permission
+from app.core.phi_audit import audit_phi_read
 from app.core.security import blind_index
 from app.modules.audit import service as audit
 from app.modules.patients import service
@@ -94,6 +95,11 @@ async def get_patient(patient_id: UUID, request: Request, actor: User = READ, db
     await audit.record(db, action="patient.read", actor=actor, resource_type="patient",
                        resource_id=patient.id, request=request, meta={"sensitive_view": _sensitive(actor)})
     await db.commit()
+    await audit_phi_read(
+    db, actor_user_id=actor.id, company_id=actor.company_id,
+    resource_type="patient", resource_id=patient.id,
+    patient_id=patient.id, request=request,
+)
     return service.to_out(patient, _sensitive(actor))
 
 
@@ -134,6 +140,11 @@ async def list_addresses(patient_id: UUID, request: Request, actor: User = READ,
     await audit.record(db, action="patient.addresses_read", actor=actor, resource_type="patient",
                        resource_id=patient.id, request=request)
     await db.commit()
+    await audit_phi_read(
+    db, actor_user_id=actor.id, company_id=actor.company_id,
+    resource_type="patient", resource_id=patient.id,
+    patient_id=patient.id, request=request,
+)
     return rows
 
 

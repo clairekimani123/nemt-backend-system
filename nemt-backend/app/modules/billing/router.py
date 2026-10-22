@@ -3,7 +3,8 @@
 from datetime import date
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi.responses import PlainTextResponse
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,36 +13,45 @@ from app.core.deps import get_db, require_permission
 from app.core.permissions import Permission
 from app.modules.audit import service as audit
 from app.modules.billing import service
-from app.modules.billing.models import Claim, ClaimLine, ClaimStatus, PayerType, RatePlan
+from app.modules.billing.formats.cms1500 import render_cms1500
+from app.modules.billing.formats.edi import (
+    BillingProvider,
+    Receiver,
+    Submitter,
+    generate_837p,
+)
+from app.modules.billing.formats.edi import (
+    Payer as EDIPayer,
+)
+from app.modules.billing.formats.edi import (
+    Subscriber as EDISubscriber,
+)
+from app.modules.billing.models import Claim, ClaimLine, ClaimStatus, RatePlan, RateRule
 from app.modules.billing.schemas import (
-    AgingBucketOut, BillableTripOut, ClaimCreateFromTrip, ClaimDetailOut, ClaimOut,
-    PostPaymentIn, RatePlanIn, RatePlanOut, RatePlanUpdate, SubmitIn,
+    AgingBucketOut,
+    BatchItemOutcome,
+    BatchOut,
+    BatchPaymentIn,
+    BatchSubmitIn,
+    BillableTripOut,
+    ClaimCreateFromTrip,
+    ClaimDetailOut,
+    ClaimOut,
+    FromTripsIn,
+    PostPaymentIn,
+    RatePlanIn,
+    RatePlanOut,
+    RatePlanUpdate,
+    RateRuleIn,
+    RateRuleOut,
+    SubmitIn,
+    SummaryOut,
 )
 from app.modules.patients.models import Patient
+from app.modules.tenants.models import Company
 from app.modules.trips.models import Trip
 from app.modules.trips.service import company_tz, day_bounds
 from app.modules.users.models import User
-from app.modules.billing.models import RateRule
-from app.modules.billing.schemas import RateRuleIn, RateRuleOut
-from fastapi import HTTPException, Response
-from app.modules.billing.schemas import (
-    BatchOut, BatchPaymentIn, BatchSubmitIn, BatchItemOutcome, FromTripsIn,
-)
-from fastapi import Query
-from fastapi.responses import PlainTextResponse
-from app.modules.billing.schemas import SummaryOut
-
-from app.modules.billing.formats.edi import (
-    BillingProvider, Payer as EDIPayer, Subscriber as EDISubscriber, Submitter, Receiver, generate_837p,
-)
-from app.modules.billing.formats.cms1500 import render_cms1500
-from app.modules.patients.models import Patient
-from app.modules.tenants.models import Company
-from app.modules.users.models import User
-
-from fastapi import Response
-from fastapi.responses import FileResponse, PlainTextResponse
-
 
 router = APIRouter(prefix="/billing", tags=["billing"])
 READ = Depends(require_permission(Permission.BILLING_READ))
