@@ -86,6 +86,11 @@ async def test_phi_access_is_audited_without_leaking_phi(client, super_token):
     logs = (await client.get("/audit-logs", headers=admin, params={"limit": 200})).json()
     actions = {row["action"] for row in logs}
     assert {"patient.create", "patient.read", "patient.list"} <= actions
+    # the row's metadata is stored (not silently dropped), and the PHI read audit is committed
+    read = next(row for row in logs if row["action"] == "patient.read")
+    assert read["metadata"] == {"sensitive_view": True}
+    phi = [row for row in logs if row["action"] == "phi.read"]
+    assert phi and phi[0]["metadata"]["patient_id"] == pid
     blob = json.dumps(logs)
     for secret in ("Zorblax", "Lovelace", "123456", "1950"):
         assert secret not in blob, secret

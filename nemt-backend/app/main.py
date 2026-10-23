@@ -12,14 +12,18 @@ from app.core.config import settings
 from app.core.db import SessionLocal, engine, is_lock_conflict
 from app.modules.audit.router import router as audit_router
 from app.modules.auth.router import router as auth_router
+from app.modules.billing.router import router as billing_router
 from app.modules.compliance.router import router as compliance_router
 from app.modules.documents.router import router as documents_router
 from app.modules.drivers.router import router as drivers_router
 from app.modules.facilities.router import brokers_router
 from app.modules.facilities.router import router as facilities_router
+from app.modules.fleet.router import router as fleet_router
+from app.modules.notifications.router import router as notifications_router
 from app.modules.passenger.router import router as passenger_router
 from app.modules.patients.router import router as patients_router
 from app.modules.realtime.ws import router as realtime_router
+from app.modules.reporting.router import router as reports_router
 from app.modules.routing.driver_route import router as driver_route_router
 from app.modules.routing.router import router as routing_router
 from app.modules.setup.router import router as setup_router
@@ -32,8 +36,6 @@ from app.modules.trips.router import board_router
 from app.modules.trips.router import router as trips_router
 from app.modules.users.router import router as users_router
 from app.modules.vehicles.router import router as vehicles_router
-from app.modules.notifications.router import router as notifications_router
-from app.modules.billing.router import router as billing_router
 
 log = logging.getLogger(__name__)
 
@@ -51,6 +53,7 @@ app.add_middleware(
     allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
     allow_methods=["*"],
     allow_headers=["Authorization", "Content-Type", "X-Tenant"],
+    expose_headers=["Retry-After"],  # the app tells a rate-limited user when to try again
 )
 
 
@@ -99,5 +102,6 @@ async def ready():
 for r in (auth_router, users_router, audit_router, platform_router, patients_router, drivers_router,
           vehicles_router, facilities_router, brokers_router, documents_router, compliance_router, trips_router, board_router, recurring_router,
           driver_app_router,  routing_router, driver_route_router, realtime_router, passenger_router,
-          setup_router, stats_router, platform_system_router, notifications_router, billing_router):
+          setup_router, stats_router, platform_system_router, notifications_router, billing_router,
+          fleet_router, reports_router):
     app.include_router(r)

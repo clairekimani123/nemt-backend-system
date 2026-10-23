@@ -1,7 +1,7 @@
 """forced password change, driver duty status, driver-position retention
 
-Revision ID: 0011
-Revises: 0010
+Revision ID: 0012
+Revises: 0011
 
 users.must_change_password   set when an administrator gives a user a temporary password; the
                              API refuses everything except "change my password" until it is done.
@@ -16,8 +16,8 @@ app_purge_driver_positions   driver_positions is append-only for the runtime rol
 from alembic import op
 import sqlalchemy as sa
 
-revision = "0011"
-down_revision = "0010"
+revision = "0012"
+down_revision = "0011"
 branch_labels = None
 depends_on = None
 

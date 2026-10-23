@@ -1,8 +1,8 @@
 """The driver's manifest: the ordered stops of today's published route."""
 
 from datetime import date, datetime
-from uuid import UUID
 
+# from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession

@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.modules.drivers.models import Driver
+from app.modules.fleet.models import VehicleMaintenance
 from app.modules.patients.models import MobilityType
 from app.modules.trips.models import Trip
 from app.modules.trips.state import OCCUPYING
@@ -117,6 +118,17 @@ async def check_assignment(
     _expiry(r, f"Vehicle {vehicle.unit_number} registration", "vehicle_registration", vehicle.registration_expires_on, trip_date)
     _expiry(r, f"Vehicle {vehicle.unit_number} insurance", "vehicle_insurance", vehicle.insurance_expires_on, trip_date)
 
+    # Maintenance due within 7 days (warning only — doesn't block)
+    latest = await db.scalar(select(VehicleMaintenance).where(
+        VehicleMaintenance.company_id == vehicle.company_id,
+        VehicleMaintenance.vehicle_id == vehicle.id,
+    ).order_by(VehicleMaintenance.service_date.desc()).limit(1))
+    if latest and latest.next_due_date:
+        days_until = (latest.next_due_date - trip_date).days
+        if days_until <= 7:
+            r.warnings.append(Issue("maintenance_due_soon",
+                                    f"Vehicle {vehicle.unit_number} maintenance due {latest.next_due_date}"))
+
     # --- 4. is anyone already busy? -----------------------------------------------------------
     buf = timedelta(minutes=settings.trip_buffer_minutes)
     busy = (await db.scalars(
@@ -159,7 +171,6 @@ def static_report(trip: Trip, driver: Driver, driver_active: bool, vehicle: Vehi
     Used by the solver's pre-pass to decide compatibility. The service layer runs the
     full check_assignment() before applying a plan.
     """
-    from datetime import date as _date
     r = Report()
     need = load_of(trip.mobility, trip.escort_count)
     if driver.archived_at is not None or not driver_active:

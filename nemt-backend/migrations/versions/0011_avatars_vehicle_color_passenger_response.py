@@ -1,7 +1,7 @@
 """profile photos, vehicle colour, passenger acceptance of an assigned driver
 
-Revision ID: 0010
-Revises: 0009
+Revision ID: 0011
+Revises: 0010
 
 users.avatar_*      a user's own profile photo. The bytes live in encrypted storage under a
                     server-generated key; the client never learns the key or a file path.
@@ -15,8 +15,8 @@ trips.passenger_*   the passenger's answer to the driver dispatch assigned:
 from alembic import op
 import sqlalchemy as sa
 
-revision = "0010"
-down_revision = "0009"
+revision = "0011"
+down_revision = "0010"
 branch_labels = None
 depends_on = None
 

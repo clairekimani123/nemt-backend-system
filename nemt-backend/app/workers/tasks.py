@@ -33,3 +33,25 @@ def purge_driver_positions() -> dict[str, int]:
     """Nightly: delete driver positions older than LOCATION_RETENTION_DAYS."""
     from app.modules.realtime.jobs import run_purge_positions
     return run_purge_positions()
+
+@celery_app.task
+def send_fleet_expiry_digest() -> dict[str, int]:
+    """Nightly: email the fleet_manager about vehicles whose docs expire soon.
+
+    Groups by company, sends one email per company that has any expiring items.
+    """
+    from app.modules.fleet.jobs import run_fleet_expiry_digest
+    return run_fleet_expiry_digest()
+
+
+@celery_app.task
+def send_daily_summaries() -> dict[str, int]:
+    """Nightly at 06:30 UTC: yesterday's ops summary to each company's staff."""
+    from app.modules.reporting.jobs import run_daily_summaries
+    return run_daily_summaries()
+
+
+@celery_app.task
+def purge_expired_audit_logs() -> dict[str, int]:
+    from app.modules.audit.jobs import run_purge_expired_audit_logs
+    return run_purge_expired_audit_logs()

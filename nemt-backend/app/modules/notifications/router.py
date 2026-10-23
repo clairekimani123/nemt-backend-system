@@ -13,7 +13,10 @@ from app.core.permissions import Permission
 from app.modules.audit import service as audit
 from app.modules.notifications.models import Channel, NotificationLog, NotificationTemplate
 from app.modules.notifications.schemas import (
-    NotificationLogOut, TemplateIn, TemplateOut, TemplateUpdate,
+    NotificationLogOut,
+    TemplateIn,
+    TemplateOut,
+    TemplateUpdate,
 )
 from app.modules.users.models import User
 

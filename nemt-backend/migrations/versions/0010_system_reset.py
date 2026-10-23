@@ -1,7 +1,7 @@
 """system reset: app_system_reset() + audit log outlives companies
 
-Revision ID: 0009
-Revises: 0008
+Revision ID: 0010
+Revises: 0009
 
 Retention policy enforced by the reset (see app/modules/tenants/system.py):
   PRESERVED  schema + migrations (alembic_version), PostGIS reference data (spatial_ref_sys),
@@ -16,8 +16,8 @@ by a later phase is cleared too instead of leaving orphaned operational rows beh
 """
 from alembic import op
 
-revision = "0009"
-down_revision = "0008"
+revision = "0010"
+down_revision = "0009"
 branch_labels = None
 depends_on = None
 

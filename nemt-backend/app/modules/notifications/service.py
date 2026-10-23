@@ -16,7 +16,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.notifications.channels import RenderedMessage, get_channel
 from app.modules.notifications.models import (
-    Channel, DeliveryStatus, NotificationLog, NotificationTemplate,
+    Channel,
+    DeliveryStatus,
+    NotificationLog,
+    NotificationTemplate,
 )
 
 log = logging.getLogger(__name__)

@@ -10,7 +10,17 @@ from typing import Any
 from uuid import UUID
 
 from geoalchemy2 import Geography
-from sqlalchemy import BigInteger, Computed, DateTime, Float, ForeignKeyConstraint, Identity, Index, func, text
+from sqlalchemy import (
+    BigInteger,
+    Computed,
+    DateTime,
+    Float,
+    ForeignKeyConstraint,
+    Identity,
+    Index,
+    func,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.base import Base, TenantMixin

@@ -269,7 +269,7 @@ The API exposes a WebSocket at `/ws`. Two things flow over it:
 - **Server → dispatchers:** every trip status change (`trip.status`), every assignment
   (`trip.assigned`), and every driver position (`driver.position`) in their tenant.
 
-### Handshake
+## Handshake
 
 ```js
 const ws = new WebSocket("wss://api.example.com/ws");
@@ -281,7 +281,7 @@ ws.onmessage = (ev) => {
   if (msg.type === "driver.position") { /* update the map */ }
 };
 
-## Notifications
+##Notifications
 
 Events become messages. `trip.assigned.driver`, `trip.en_route.patient`,
 `trip.reminder.patient`, `driver.manifest.daily` — each has a template per
@@ -324,3 +324,231 @@ Requires `settings:write` (company_admin or super_admin).
   fine; date of birth, Medicaid ID, and diagnosis are not. Templates are reviewed
   against this rule before going live.
 - The log is append-only. Every attempt is a new row.
+
+
+## Billing
+
+The billing module turns completed trips into claims, submits them to payers, tracks
+payments and denials, and produces the files payers actually accept.
+
+### Claim lifecycle
+
+
+draft ──submit──▶ submitted ──payment(full)──▶ paid
+│
+├──payment(partial)──▶ partial
+├──denial ─────────▶ denied ──write-off──▶ written_off
+└──write-off ───────▶ written_off
+
+
+
+Every transition is an audit log entry. `claim_payments` is append-only — payments and
+adjustments are rows, never overwrites. To see the history of a claim, query its
+payments, not its status column.
+
+### Pricing
+
+Two layers:
+
+1. **Rate plan** (`POST /billing/rate-plans`) — base fare, per-mile, per-minute,
+   mobility surcharges, after-hours multiplier, wait time, no-show fee, late-cancel
+   fee. One default per company; optional per-broker override.
+
+2. **Rate rules** (`POST /billing/rate-plans/{id}/rules`) — override the base
+   computation for specific cases. Each rule can filter on broker, procedure code,
+   mobility, and weekday. Two kinds:
+   - `flat` — replace the running amount with `amount_cents`
+   - `multiplier` — scale the running amount by `multiplier_bp / 10000`
+
+   Rules run in descending priority order. A matching rule with `exclusive: true`
+   stops further evaluation.
+
+The pricing function is deliberately simple and deterministic. If the rule engine
+returns the wrong answer for a specific contract, add a new rule — do not add code.
+
+### Endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/billing/rate-plans` | List rate plans |
+| `POST` | `/billing/rate-plans` | Create a plan |
+| `PATCH` | `/billing/rate-plans/{id}` | Update a plan |
+| `GET` | `/billing/rate-plans/{id}/rules` | List rules for a plan |
+| `POST` | `/billing/rate-plans/{id}/rules` | Create a rule |
+| `DELETE` | `/billing/rate-plans/{id}/rules/{rule_id}` | Delete a rule |
+| `GET` | `/billing/billable-trips` | Completed trips with no claim yet |
+| `POST` | `/billing/claims/from-trip/{trip_id}` | Create one claim from a trip |
+| `POST` | `/billing/claims/from-trips` | Batch: N trips → N claims |
+| `GET` | `/billing/claims` | List claims |
+| `GET` | `/billing/claims/{id}` | Get one claim + lines + payments |
+| `POST` | `/billing/claims/{id}/submit` | Submit a draft claim |
+| `POST` | `/billing/claims/{id}/payments` | Post a payment, adjustment, or denial |
+| `POST` | `/billing/claims/{id}/write-off` | Write off a claim |
+| `POST` | `/billing/claims/batch-submit` | Submit many claims |
+| `POST` | `/billing/claims/batch-pay` | Post the same payment to many |
+| `GET` | `/billing/reports/summary?from=&to=` | Revenue, denial rate, DSO, top brokers |
+| `GET` | `/billing/claims.csv?from=&to=` | CSV export for a date range |
+| `GET` | `/billing/claims/{id}/837p.edi` | X12 5010 837P file |
+| `GET` | `/billing/claims/{id}/cms1500.pdf` | Printable CMS-1500 |
+| `POST` | `/billing/claims/batch-837p` | One 837P file, N claims |
+
+Permissions: `billing:read` (list, view, export, report) and `billing:write` (create,
+submit, pay, write off, edit rate plans). Both held by `super_admin` and
+`company_admin`; `billing_staff` has write; `dispatcher` has neither (dispatch can't
+see money).
+
+### Exports
+
+**837P** (`application/edi-x12`) — X12 5010 professional claim. Structure is valid and
+ready for a clearinghouse. The values (NPI, tax ID, submitter ID, payer ID, member ID)
+come from placeholders right now; substituting them from a per-company `billing_settings`
+table is Phase 11 work.
+
+**CMS-1500** (`application/pdf`) — a filled-out CMS-1500 form. Printable and mailable.
+Not pixel-identical to the official form; an overlay on the official PDF template is
+Phase 11 work if a payer requires exact layout.
+
+Both exports are tenant-scoped. A user in company A cannot fetch a claim belonging to
+company B, even with a valid claim ID. This is enforced by the same `get_or_404` +
+RLS pattern used everywhere else.
+
+### Batch semantics
+
+Batch endpoints (`from-trips`, `batch-submit`, `batch-pay`) share one contract:
+
+- **Per-item outcomes.** Response is `200 OK` with `{requested, succeeded, failed, outcomes[]}`. Each outcome has `index`, `ok`, `id` (if success), `error` (if failure).
+- **Each item is atomic, the batch is not.** One failed item rolls back to its own savepoint; the rest proceed. A batch of 100 with one bad claim writes 99 good claims and one error.
+- **The commit is at the end.** If the whole request crashes mid-batch, nothing is written. If it completes, all successful items are durable.
+
+### Reports
+
+`GET /billing/reports/summary?from=YYYY-MM-DD&to=YYYY-MM-DD` returns:
+
+```json
+{
+  "claim_count": 42,
+  "billed_cents": 210000,
+  "paid_cents": 185000,
+  "outstanding_cents": 25000,
+  "denied_count": 3,
+  "denial_rate_bp": 714,
+  "avg_days_to_payment": 18.4,
+  "by_payer": [...],
+  "top_brokers": [...]
+}
+
+
+billing-smoke:
+	@echo "=== rate engine (pure) ==="
+	python -m pytest tests/test_billing.py -k "compute_charge or apply_rules" -q
+	@echo ""
+	@echo "=== billing API (DB + HTTP) ==="
+	python -m pytest tests/test_billing.py -q
+	@echo ""
+	@echo "=== end-to-end pipeline ==="
+	python -m pytest tests/test_billing_e2e.py -q
+
+
+### Reports.
+
+Operational reporting endpoints. All read-only, all tenant-scoped, all accept
+`?from=YYYY-MM-DD&to=YYYY-MM-DD` (inclusive). Missing either bound defaults to the
+last 7 days.
+
+| Endpoint | Answers |
+|---|---|
+| `GET /reports/on-time` | Are pickups happening when promised? Overall and per-driver. |
+| `GET /reports/cancellations` | What's cancelled, by reason, and how many were late. |
+| `GET /reports/no-shows` | How many no-shows, and by which drivers. |
+| `GET /reports/volume` | Trips per day, by mobility type, by source. |
+| `GET /reports/utilization/drivers` | Of each driver's active hours, how much was spent driving? |
+| `GET /reports/utilization/vehicles` | Same shape, per vehicle, plus maintenance cost. |
+| `GET /reports/revenue-productivity` | Billed, paid, revenue per trip, revenue per km, paid rate. |
+| `GET /reports/leaderboard` | Top drivers by completed trips. |
+
+### Design notes
+
+- **Local day boundaries.** A trip that started at 23:55 local on Monday counts for Monday,
+  not Tuesday. Uses the same `company_tz` + `day_bounds` helper that trips use.
+- **Basis points everywhere a rate is returned.** `on_time_rate_bp: 9473` is 94.73%.
+  No float ambiguity; comparisons and JSON round-trips are exact.
+- **On-demand aggregation.** Every request aggregates from `trips` and `claims`.
+  Fast up to ~50k trips/month. Beyond that, a `reporting_daily` materialized table would
+  be added in Phase 9.5 — not needed yet.
+- **No patient names in reports.** Driver names appear; patient names do not. Keeping PII
+  out of the operational dashboard also keeps it out of the operational reports, which
+  are often screenshotted and shared.
+
+### Nightly ops summary
+
+A Celery beat task (`send_daily_summaries`, 06:30 UTC) sends each company's staff
+(company_admin, dispatcher, billing_staff, fleet_manager) an email with yesterday's
+numbers. Content: total trips, on-time rate, cancellations by reason, no-shows,
+revenue billed / paid, and the top five drivers.
+
+Companies with zero trips yesterday receive no email. Silence is the "all clear."
+
+
+## Security
+
+The backend is designed for HIPAA-shaped workloads: patient identifiers, medical notes,
+and trip details are treated as PHI.
+
+### Access control
+
+- **Role-based**: every endpoint requires a specific permission. See `app/core/permissions.py`.
+- **Tenant-isolated**: PostgreSQL Row-Level Security on every PHI table. Even if the app
+  layer forgets a filter, the database returns zero rows.
+- **MFA**: enforced for `super_admin`, optional for other roles.
+- **Session management**: 15-minute access tokens, 14-day refresh tokens with rotation
+  and reuse detection. Force-logout via `POST /users/{id}/force-logout`.
+
+### Rate limiting
+
+Auth endpoints have Redis-backed sliding-window limits:
+
+| Endpoint | Limit | Window |
+|---|---|---|
+| `POST /auth/login` (per IP) | 20 | 60s |
+| `POST /auth/login` (per email) | 5 | 60s |
+| `POST /auth/register` (per IP) | 5 | 1h |
+| `POST /auth/password/forgot` (per IP) | 3 | 1h |
+| `POST /auth/mfa/login` (per IP) | 10 | 60s |
+
+Configurable via `RATE_LIMIT_*` env vars. Disabled when `ENV=test` to keep the test
+suite fast; one dedicated test verifies the limiter works.
+
+### Encryption
+
+- **Passwords**: Argon2id.
+- **PHI fields**: Fernet (AES-128-CBC + HMAC-SHA256) with `MultiFernet` for key rotation.
+- **Tokens**: SHA-256 hash stored, raw token only in transit.
+- **In transit**: TLS at the reverse proxy.
+
+### Audit
+
+- Every mutation: `audit_logs` row.
+- Every PHI read: `phi.read` row.
+- Append-only at the DB grant level (no UPDATE, no DELETE for the runtime role).
+- 6-year retention, purged nightly.
+
+### Data retention
+
+| Data | Retention |
+|---|---|
+| Audit logs | 6 years |
+| Patient records | 7 years after last service (Phase 11) |
+| Session tokens | 14 days (rotating) |
+| Password reset tokens | 30 minutes, single-use |
+
+### Documentation
+
+- `docs/key_rotation.md` — how to rotate field encryption keys
+- `docs/backup_restore.md` — backup cadence and restore procedure
+- `docs/hipaa_compliance.md` — one-page summary for auditors
+
+### Testing
+
+```bash
+make security-smoke
+Runs the auth, RBAC, tenant-isolation, audit, rate-limit, and PHI-audit test suites.

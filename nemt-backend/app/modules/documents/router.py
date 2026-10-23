@@ -20,8 +20,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.base import new_id
 from app.core.config import settings
 from app.core.crud import flush_or_409, get_or_404
-from app.core.deps import get_current_user, get_db
+from app.core.deps import get_current_user, get_db, require_permission
 from app.core.permissions import Permission, has_permission
+from app.core.phi_audit import audit_phi_read
 from app.core.storage import Storage, get_storage
 from app.modules.audit import service as audit
 from app.modules.documents.models import DocType, Document, OwnerType
@@ -31,6 +32,9 @@ from app.modules.facilities.models import Facility
 from app.modules.patients.models import Patient
 from app.modules.users.models import User
 from app.modules.vehicles.models import Vehicle
+
+READ = Depends(require_permission(Permission.PATIENTS_READ))
+WRITE = Depends(require_permission(Permission.PATIENTS_WRITE))
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -117,24 +121,47 @@ async def list_documents(
     return (await db.scalars(stmt.order_by(Document.created_at.desc()))).all()
 
 
-@router.get("/{document_id}/download")
+@router.get("/{doc_id}/download")
 async def download_document(
-    document_id: UUID, request: Request,
+    doc_id: UUID,
+    request: Request,
     actor: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     storage: Storage = Depends(get_storage),
 ):
-    doc = await get_or_404(db, Document, document_id, actor.company_id, "Document")
+    """Stream the file's bytes. Every download writes two audit rows: a PHI audit
+    (for HIPAA compliance — who looked at this patient's data) and a `document.download`
+    action (for the operational trail — who downloaded this specific document)."""
+    doc = await get_or_404(db, Document, doc_id, actor.company_id, "Document")
     _require(actor, READ_PERM[doc.owner_type])
+
     data = await storage.get(doc.storage_key)
+    if data is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "File not found in storage")
+
+    patient_id: UUID | None = None
+    if doc.owner_type == OwnerType.PATIENT:
+        patient_id = getattr(doc, "patient_id", None)
+
+    await audit_phi_read(
+        db, actor_user_id=actor.id, company_id=actor.company_id,
+        resource_type="document", resource_id=doc.id,
+        patient_id=patient_id, request=request,
+    )
     await audit.record(db, action="document.download", actor=actor, resource_type="document",
                        resource_id=doc.id, request=request,
-                       meta={"owner_type": doc.owner_type.value, "owner_id": str(doc.owner_id)})
+                       meta={"owner_type": doc.owner_type.value if hasattr(doc.owner_type, "value") else doc.owner_type,
+                             "filename": doc.filename})
     await db.commit()
-    return Response(content=data, media_type=doc.content_type, headers={
-        "Content-Disposition": f'attachment; filename="{doc.filename}"',  # attachment: never rendered inline
-        "Content-Security-Policy": "default-src 'none'; sandbox",
-    })
+
+    return Response(
+        content=data,
+        media_type=doc.content_type or "application/octet-stream",
+        headers={
+            "Content-Disposition": f'attachment; filename="{doc.filename}"',
+            "Content-Security-Policy": "sandbox",
+        },
+    )
 
 
 @router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)

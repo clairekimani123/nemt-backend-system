@@ -16,6 +16,7 @@ redis>=5.0
 geoalchemy2>=0.15
 python-multipart>=0.0.9
 python-dateutil>=2.9
+reportlab>=4.0
 
 [dev]
 pytest>=8

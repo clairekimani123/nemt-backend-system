@@ -10,7 +10,7 @@ from app.core.db import engine, open_tenant_session
 
 async def purge_positions() -> int:
     """The runtime role has no DELETE on driver_positions; app_purge_driver_positions (migration
-    0011) runs as the table owner and only ever removes rows older than the retention window."""
+    0012) runs as the table owner and only ever removes rows older than the retention window."""
     async with open_tenant_session(None, bypass=True) as db:
         n = await db.scalar(text("SELECT app_purge_driver_positions(:d)"), {"d": settings.location_retention_days})
         await db.commit()

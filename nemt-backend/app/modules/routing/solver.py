@@ -31,15 +31,15 @@ class Load:
     wheelchair: int = 0
     stretcher: int = 0
 
-    def __add__(self, other: "Load") -> "Load":
+    def __add__(self, other: Load) -> Load:
         return Load(self.seats + other.seats, self.wheelchair + other.wheelchair,
                     self.stretcher + other.stretcher)
 
-    def __sub__(self, other: "Load") -> "Load":
+    def __sub__(self, other: Load) -> Load:
         return Load(self.seats - other.seats, self.wheelchair - other.wheelchair,
                     self.stretcher - other.stretcher)
 
-    def __le__(self, other: "Load") -> bool:
+    def __le__(self, other: Load) -> bool:
         return (self.seats <= other.seats and self.wheelchair <= other.wheelchair
                 and self.stretcher <= other.stretcher)
 
@@ -334,7 +334,7 @@ def _candidate_insertions(seq: _Seq, job: Job, jobs_by_key: dict[str, Job],
             sim = _simulate(candidate, jobs_by_key, seq.spec, travel)
             if sim is None:
                 continue
-            stops, drive, penalty = sim
+            _stops, drive, penalty = sim
             yield p_pos, d_pos, _objective(drive, penalty)
 
 
