@@ -28,7 +28,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.base import Base, IdMixin, TenantMixin, TimestampMixin, str_enum
 from app.modules.patients.models import MobilityType
-from app.modules.trips.state import CancelReason, Leg, TripSource, TripStatus
+from app.modules.trips.state import CancelReason, Leg, PassengerResponse, TripSource, TripStatus
 
 
 def _place(prefix: str) -> type:
@@ -119,6 +119,10 @@ class Trip(IdMixin, TenantMixin, TimestampMixin, PickupPlace, DropoffPlace, Base
     vehicle_id: Mapped[UUID | None]
     assigned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     assigned_by: Mapped[UUID | None]
+    # The passenger's answer to the assigned driver (NULL = no answer needed; see state.py).
+    passenger_response: Mapped[PassengerResponse | None] = mapped_column(
+        str_enum(PassengerResponse, "trip_passenger_response", length=16))
+    passenger_responded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # When. All instants are UTC; `ends_at` = pickup + estimated duration (kept in step by the service).
     scheduled_pickup_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
@@ -167,6 +171,8 @@ class Trip(IdMixin, TenantMixin, TimestampMixin, PickupPlace, DropoffPlace, Base
         CheckConstraint("status <> 'scheduled' OR driver_id IS NULL", name="scheduled_has_no_assignment"),
         CheckConstraint("status IN ('scheduled', 'cancelled') OR driver_id IS NOT NULL", name="active_trip_needs_driver"),
         CheckConstraint("status <> 'cancelled' OR cancel_reason_code IS NOT NULL", name="cancel_needs_reason"),
+        CheckConstraint("passenger_response IS NULL OR (passenger_response = 'declined') = (driver_id IS NULL)",
+                        name="passenger_response_matches_assignment"),
         Index("ix_trips_company_pickup", "company_id", "scheduled_pickup_at"),
         Index("ix_trips_company_status", "company_id", "status"),
         Index("ix_trips_driver_time", "driver_id", "scheduled_pickup_at", postgresql_where=text("driver_id IS NOT NULL")),

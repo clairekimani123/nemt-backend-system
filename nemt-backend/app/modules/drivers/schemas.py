@@ -4,6 +4,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field, field_validator
 
 from app.core.types import Email, Password
+from app.modules.drivers.models import DutyStatus
 
 
 class DriverCreate(BaseModel):
@@ -62,3 +63,5 @@ class DriverOut(BaseModel):
     emergency_contact_phone: str | None
     archived_at: datetime | None
     created_at: datetime
+    duty_status: DutyStatus = DutyStatus.OFF_DUTY
+    duty_changed_at: datetime | None = None

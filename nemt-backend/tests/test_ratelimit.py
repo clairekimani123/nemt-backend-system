@@ -93,6 +93,7 @@ async def test_register_rate_limit(client, super_token, monkeypatch):
             "email": f"rl_test_{i}@example.com",
             "password": "a-strong-password-1234",
             "full_name": f"RL Test {i}",
+            "date_of_birth": "1960-02-03",  # required since passenger self-registration creates the profile
         })
         statuses.append(r.status_code)
 

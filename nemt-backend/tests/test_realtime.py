@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app as fastapi_app
 from tests.helpers import (
+    bearer,
     PW,
     assign,
     at,
@@ -74,6 +75,9 @@ async def test_driver_location_reaches_own_tenant_only(client, super_token):
     alpha_disp = await login(client, "alpha", alpha["admin_email"], PW)
     alpha_drv = await login(client, "alpha", wa["driver"]["email"], PW)
     bravo_disp = await login(client, "bravo", bravo["admin_email"], PW)
+    # an off-duty driver's location is refused (see test_driver_dashboard); go on duty first
+    r = await client.put("/driver/me/duty", headers=bearer(alpha_drv["access_token"]), json={"duty_status": "available"})
+    assert r.status_code == 200
 
     def _inner():
         with TestClient(fastapi_app) as tc:

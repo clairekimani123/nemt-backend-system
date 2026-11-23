@@ -28,6 +28,11 @@ def send_daily_driver_manifests() -> dict[str, int]:
     from app.modules.notifications.jobs import run_daily_manifests
     return run_daily_manifests()
 
+@celery_app.task
+def purge_driver_positions() -> dict[str, int]:
+    """Nightly: delete driver positions older than LOCATION_RETENTION_DAYS."""
+    from app.modules.realtime.jobs import run_purge_positions
+    return run_purge_positions()
 
 @celery_app.task
 def send_fleet_expiry_digest() -> dict[str, int]:

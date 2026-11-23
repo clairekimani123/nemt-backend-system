@@ -22,6 +22,7 @@ from app.modules.patients.schemas import (
     PatientOut,
     PatientUpdate,
 )
+from app.modules.realtime import publisher as rt
 from app.modules.users.models import User
 
 router = APIRouter(prefix="/patients", tags=["patients (PHI)"])
@@ -56,6 +57,7 @@ async def create_patient(body: PatientCreate, request: Request, actor: User = WR
                        resource_id=patient.id, request=request)
     await db.commit()
     await db.refresh(patient)
+    await rt.patient_created(actor.company_id, patient.id, self_registered=False)
     return service.to_out(patient, _sensitive(actor))
 
 
@@ -94,12 +96,12 @@ async def get_patient(patient_id: UUID, request: Request, actor: User = READ, db
     patient = await _own_patient(db, actor, patient_id)
     await audit.record(db, action="patient.read", actor=actor, resource_type="patient",
                        resource_id=patient.id, request=request, meta={"sensitive_view": _sensitive(actor)})
-    await db.commit()
     await audit_phi_read(
-    db, actor_user_id=actor.id, company_id=actor.company_id,
-    resource_type="patient", resource_id=patient.id,
-    patient_id=patient.id, request=request,
-)
+        db, actor_user_id=actor.id, company_id=actor.company_id,
+        resource_type="patient", resource_id=patient.id,
+        patient_id=patient.id, request=request,
+    )
+    await db.commit()
     return service.to_out(patient, _sensitive(actor))
 
 
@@ -139,12 +141,12 @@ async def list_addresses(patient_id: UUID, request: Request, actor: User = READ,
         .order_by(PatientAddress.is_primary.desc(), PatientAddress.label))).all()
     await audit.record(db, action="patient.addresses_read", actor=actor, resource_type="patient",
                        resource_id=patient.id, request=request)
-    await db.commit()
     await audit_phi_read(
-    db, actor_user_id=actor.id, company_id=actor.company_id,
-    resource_type="patient", resource_id=patient.id,
-    patient_id=patient.id, request=request,
-)
+        db, actor_user_id=actor.id, company_id=actor.company_id,
+        resource_type="patient", resource_id=patient.id,
+        patient_id=patient.id, request=request,
+    )
+    await db.commit()
     return rows
 
 

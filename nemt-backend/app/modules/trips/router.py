@@ -2,7 +2,7 @@ from datetime import UTC, date, datetime, timedelta
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request, status
-from sqlalchemy import and_, select
+from sqlalchemy import and_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -185,23 +185,43 @@ async def board(on_date: date, actor: User = READ, db: AsyncSession = Depends(ge
 
 
 @board_router.get("/live")
-async def live_positions(actor: User = READ, db: AsyncSession = Depends(get_db)):
-    """The last known position of every driver who has reported in the last 30 minutes."""
-    from datetime import timedelta
-
-    from sqlalchemy import text as _t
-    cutoff = datetime.now(UTC) - timedelta(minutes=30)
-    # newest position per driver, tenant-scoped by RLS
-    rows = (await db.execute(_t("""
-        SELECT DISTINCT ON (driver_id) driver_id, latitude, longitude, trip_id, recorded_at
-        FROM driver_positions
-        WHERE recorded_at > :cutoff
-        ORDER BY driver_id, recorded_at DESC
-    """), {"cutoff": cutoff})).all()
+async def live_positions(actor: User = Depends(require_permission(Permission.DISPATCH)),
+                         db: AsyncSession = Depends(get_db)):
+    """Who is out there, and where. `positions`: the last position of every driver who reported in
+    the last 30 minutes (unchanged shape). `drivers`: every driver who is on duty or has a recent
+    position, with `stale` (older than LOCATION_STALE_SECONDS) and NO position when the driver
+    shares none: an old point is never presented as live. Tenant-scoped by RLS.
+    Dispatch only (dispatch:manage): billing staff can read trips but not track drivers."""
+    now = datetime.now(UTC)
+    rows = (await db.execute(text("""
+        SELECT d.id, u.full_name, d.duty_status, p.latitude, p.longitude, p.trip_id, p.recorded_at, t.trip_number
+        FROM drivers d
+        JOIN users u ON u.id = d.user_id AND u.company_id = d.company_id
+        LEFT JOIN LATERAL (
+            SELECT latitude, longitude, trip_id, recorded_at FROM driver_positions dp
+            WHERE dp.driver_id = d.id AND dp.company_id = d.company_id AND dp.recorded_at > :cutoff
+            ORDER BY dp.recorded_at DESC LIMIT 1
+        ) p ON true
+        LEFT JOIN trips t ON t.id = p.trip_id AND t.company_id = d.company_id
+        WHERE d.archived_at IS NULL AND u.is_active
+          AND (d.duty_status <> 'off_duty' OR p.recorded_at IS NOT NULL)
+        ORDER BY p.recorded_at DESC NULLS LAST, u.full_name
+    """), {"cutoff": now - timedelta(minutes=30)})).all()
+    drivers = []
+    for did, name, duty, lat, lng, trip_id, at, trip_no in rows:
+        age = int((now - at).total_seconds()) if at else None
+        drivers.append({
+            "driver_id": str(did), "full_name": name, "duty_status": duty,
+            "lat": lat, "lng": lng, "at": at.isoformat() if at else None, "age_seconds": age,
+            "stale": age is not None and age > settings.location_stale_seconds,
+            "trip_id": str(trip_id) if trip_id else None,
+            "trip_ref": f"T-{trip_no:06d}" if trip_no else None,
+        })
     return {
+        "stale_after_seconds": settings.location_stale_seconds,
+        "drivers": drivers,
         "positions": [
-            {"driver_id": str(r[0]), "lat": r[1], "lng": r[2],
-             "trip_id": str(r[3]) if r[3] else None, "at": r[4].isoformat()}
-            for r in rows
+            {"driver_id": d["driver_id"], "lat": d["lat"], "lng": d["lng"], "trip_id": d["trip_id"], "at": d["at"]}
+            for d in drivers if d["at"] is not None
         ],
     }

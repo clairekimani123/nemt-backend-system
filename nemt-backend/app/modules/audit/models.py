@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Identity, String, func
+from sqlalchemy import BigInteger, DateTime, Identity, String, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -15,9 +15,8 @@ class AuditLog(Base):
     __tablename__ = "audit_logs"
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
-    company_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("companies.id", ondelete="RESTRICT"), index=True
-    )
+    # deliberately no FK (since 0006): the log must outlive the company, e.g. across a system reset
+    company_id: Mapped[UUID | None] = mapped_column(index=True)
     actor_user_id: Mapped[UUID | None]  # deliberately no FK: log must outlive the user
     action: Mapped[str] = mapped_column(String(80), index=True)
     resource_type: Mapped[str | None] = mapped_column(String(60))

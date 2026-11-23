@@ -30,6 +30,7 @@ def to_out(d: Driver, u: User, actor: User) -> DriverOut:
         wheelchair_certified=d.wheelchair_certified, hire_date=d.hire_date,
         emergency_contact_name=d.emergency_contact_name, emergency_contact_phone=d.emergency_contact_phone,
         archived_at=d.archived_at, created_at=d.created_at,
+        duty_status=d.duty_status, duty_changed_at=d.duty_changed_at,
     )
     if d.license_number_enc and has_permission(actor.role, Permission.DRIVERS_WRITE):
         out.license_number = decrypt_field(d.license_number_enc)
@@ -125,7 +126,7 @@ async def archive_driver(driver_id: UUID, request: Request, actor: User = WRITE,
     """Offboarding: archive the profile, disable the login, and kill every active session."""
     d, u = await _load(db, actor, driver_id)
     d.archived_at, u.is_active = datetime.now(UTC), False
-    await revoke_user_sessions(db, u.id)
+    await revoke_user_sessions(db, u)
     await audit.record(db, action="driver.archive", actor=actor, resource_type="driver",
                        resource_id=d.id, request=request)
     await db.commit()

@@ -27,6 +27,10 @@ celery_app.conf.update(
             "task": "app.workers.tasks.send_daily_driver_manifests",
             "schedule": crontab(hour=5, minute=0),   # 05:00 UTC
         },
+        "purge-driver-positions": {
+            "task": "app.workers.tasks.purge_driver_positions",
+            "schedule": crontab(hour=3, minute=30),  # 03:30 UTC
+        },
 
         "send-fleet-expiry-digest": {
             "task": "app.workers.tasks.send_fleet_expiry_digest",

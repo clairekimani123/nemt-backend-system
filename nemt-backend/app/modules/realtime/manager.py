@@ -8,8 +8,9 @@ Redis pub/sub or Postgres LISTEN/NOTIFY — the interface stays the same.
 import asyncio
 import logging
 from collections import defaultdict
+from dataclasses import dataclass
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import WebSocket
 from pydantic import BaseModel
@@ -18,36 +19,36 @@ from app.core.permissions import Role
 
 log = logging.getLogger(__name__)
 
-# A socket is identified by (company_id, user_id). It carries a role for fan-out.
-SocketKey = tuple[UUID, UUID]
+# Every socket gets its own key, so ONE user may have several (two tabs, phone + laptop) and each
+# tab keeps its own feed. Each socket remembers the login session (refresh-token family) it
+# authenticated with, so signing that session out closes exactly its sockets.
+SocketKey = tuple[UUID, UUID]  # (company_id, connection id)
+
+
+@dataclass(frozen=True)
+class Conn:
+    ws: WebSocket
+    role: Role
+    user_id: UUID
+    session_id: UUID
 
 
 class ConnectionManager:
     def __init__(self) -> None:
-        # (company_id, user_id) → (websocket, role, user_id)
-        self._by_user: dict[SocketKey, tuple[WebSocket, Role, UUID]] = {}
-        # company_id → set of SocketKeys
+        self._conns: dict[SocketKey, Conn] = {}
         self._by_company: dict[UUID, set[SocketKey]] = defaultdict(set)
         self._lock = asyncio.Lock()
 
-    async def add(self, company_id: UUID, user_id: UUID, role: Role, ws: WebSocket) -> SocketKey:
-        key: SocketKey = (company_id, user_id)
+    async def add(self, company_id: UUID, user_id: UUID, role: Role, ws: WebSocket, session_id: UUID) -> SocketKey:
+        key: SocketKey = (company_id, uuid4())
         async with self._lock:
-            # If this user already has a socket, replace it (a driver reconnecting from a
-            # new phone should not leave a ghost socket behind).
-            old = self._by_user.get(key)
-            if old is not None:
-                try:
-                    await old[0].close(code=1000)
-                except Exception:
-                    pass
-            self._by_user[key] = (ws, role, user_id)
+            self._conns[key] = Conn(ws, role, user_id, session_id)
             self._by_company[company_id].add(key)
         return key
 
     async def remove(self, key: SocketKey) -> None:
         async with self._lock:
-            self._by_user.pop(key, None)
+            self._conns.pop(key, None)
             company_id = key[0]
             self._by_company.get(company_id, set()).discard(key)
             if not self._by_company.get(company_id):
@@ -65,16 +66,15 @@ class ConnectionManager:
             keys = list(self._by_company.get(company_id, ()))
         sent = 0
         for key in keys:
-            entry = self._by_user.get(key)
-            if entry is None:
+            conn = self._conns.get(key)
+            if conn is None:
                 continue
-            ws, role, uid = entry
-            if roles is not None and role not in roles:
+            if roles is not None and conn.role not in roles:
                 continue
-            if user_ids is not None and uid not in user_ids:
+            if user_ids is not None and conn.user_id not in user_ids:
                 continue
             try:
-                await ws.send_json(payload)
+                await conn.ws.send_json(payload)
                 sent += 1
             except Exception as exc:                        # a closed socket must never break the fan-out
                 log.warning("drop send to %s: %s", key, exc)
@@ -84,8 +84,36 @@ class ConnectionManager:
     async def to_user(self, company_id: UUID, user_id: UUID, message: BaseModel) -> int:
         return await self.broadcast(company_id, message, user_ids={user_id})
 
+    async def _close(self, match, code: int) -> int:  # type: ignore[no-untyped-def]
+        async with self._lock:
+            keys = [k for k, c in self._conns.items() if match(k, c)]
+            conns = [self._conns.pop(k) for k in keys]
+            for k in keys:
+                self._by_company.get(k[0], set()).discard(k)
+        for c in conns:
+            try:
+                await c.ws.close(code=code)
+            except Exception:
+                pass
+        return len(conns)
+
+    async def close_session(self, company_id: UUID, session_id: UUID, code: int = 4401) -> int:
+        """Sign-out of one login session: close the sockets that authenticated with it."""
+        return await self._close(lambda k, c: k[0] == company_id and c.session_id == session_id, code)
+
+    async def close_user(self, company_id: UUID, user_id: UUID, code: int = 4401) -> int:
+        """All of a user's sessions were revoked (password reset, deactivation)."""
+        return await self._close(lambda k, c: k[0] == company_id and c.user_id == user_id, code)
+
+    async def close_all(self, code: int = 4401) -> int:
+        """Disconnect every socket (used by the system reset: old sessions must not linger)."""
+        n = await self._close(lambda k, c: True, code)
+        async with self._lock:
+            self._by_company.clear()
+        return n
+
     def stats(self) -> dict[str, Any]:
-        return {"sockets": len(self._by_user), "companies": len(self._by_company)}
+        return {"sockets": len(self._conns), "companies": len(self._by_company)}
 
 
 # one manager per process

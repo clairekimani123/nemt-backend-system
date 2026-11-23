@@ -86,6 +86,11 @@ async def test_phi_access_is_audited_without_leaking_phi(client, super_token):
     logs = (await client.get("/audit-logs", headers=admin, params={"limit": 200})).json()
     actions = {row["action"] for row in logs}
     assert {"patient.create", "patient.read", "patient.list"} <= actions
+    # the row's metadata is stored (not silently dropped), and the PHI read audit is committed
+    read = next(row for row in logs if row["action"] == "patient.read")
+    assert read["metadata"] == {"sensitive_view": True}
+    phi = [row for row in logs if row["action"] == "phi.read"]
+    assert phi and phi[0]["metadata"]["patient_id"] == pid
     blob = json.dumps(logs)
     for secret in ("Zorblax", "Lovelace", "123456", "1950"):
         assert secret not in blob, secret
@@ -138,15 +143,20 @@ async def test_addresses_geocoding_and_primary_switching(client, super_token):
 
 async def test_portal_user_linking_rules(client, super_token):
     c, admin = await _setup(client, super_token)
-    reg = await client.post("/auth/register", headers={"X-Tenant": "alpha"},
-                            json={"email": "rider@example.com", "password": PW, "full_name": "Rider"})
-    rider_id = reg.json()["id"]
+    # a passenger login created by staff has no profile yet, so it may be linked to one
+    rider_id = (await make_user(client, c, "rider@example.com", "passenger"))["id"]
     staff = await make_user(client, c, "disp@alpha.example.com", "dispatcher")
     ok = await client.post("/patients", headers=admin, json=patient_payload(user_id=rider_id))
     assert ok.status_code == 201 and ok.json()["user_id"] == rider_id
     again = await client.post("/patients", headers=admin, json=patient_payload(
         first_name="Other", medicaid_id="OT-123456", user_id=rider_id))
     assert again.status_code == 409                                   # one portal login = one patient
+    reg = await client.post("/auth/register", headers={"X-Tenant": "alpha"}, json={
+        "email": "self@example.com", "password": PW, "full_name": "Self Reg", "date_of_birth": "1970-01-01"})
+    assert reg.status_code == 201                                     # self-registration links its own profile...
+    dup = await client.post("/patients", headers=admin, json=patient_payload(
+        first_name="Y", medicaid_id=None, user_id=reg.json()["id"]))
+    assert dup.status_code == 409                                     # ...so it can't be linked twice
     bad = await client.post("/patients", headers=admin, json=patient_payload(
         first_name="X", medicaid_id=None, user_id=staff["id"]))
     assert bad.status_code == 422                                     # only passenger accounts

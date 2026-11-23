@@ -1,10 +1,28 @@
-from datetime import date
+from datetime import date, datetime
+from enum import StrEnum
 from uuid import UUID
 
-from sqlalchemy import Boolean, Date, ForeignKeyConstraint, Index, String, UniqueConstraint, text
+from sqlalchemy import (
+    Boolean,
+    Date,
+    DateTime,
+    Enum,
+    ForeignKeyConstraint,
+    Index,
+    String,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.base import ArchiveMixin, Base, IdMixin, TenantMixin, TimestampMixin
+
+
+class DutyStatus(StrEnum):
+    """What the driver says about themselves. 'On a ride' is derived from their live trips."""
+    AVAILABLE = "available"
+    UNAVAILABLE = "unavailable"   # on duty, but on a break / can't take more work right now
+    OFF_DUTY = "off_duty"
 
 
 class Driver(IdMixin, TenantMixin, TimestampMixin, ArchiveMixin, Base):
@@ -23,6 +41,11 @@ class Driver(IdMixin, TenantMixin, TimestampMixin, ArchiveMixin, Base):
     hire_date: Mapped[date | None] = mapped_column(Date)
     emergency_contact_name: Mapped[str | None] = mapped_column(String(200))
     emergency_contact_phone: Mapped[str | None] = mapped_column(String(32))
+    duty_status: Mapped[DutyStatus] = mapped_column(
+        Enum(DutyStatus, native_enum=False, length=16, create_constraint=True, name="driver_duty_status",
+             values_callable=lambda e: [m.value for m in e]),
+        default=DutyStatus.OFF_DUTY, server_default="off_duty")
+    duty_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (
         UniqueConstraint("company_id", "id", name="uq_drivers_company_id_id"),

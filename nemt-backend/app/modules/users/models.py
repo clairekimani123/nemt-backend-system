@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, Index, String, UniqueConstraint, text
+from sqlalchemy import CheckConstraint, DateTime, Enum, Index, String, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.base import Base, IdMixin, TenantMixin, TimestampMixin
@@ -25,10 +25,22 @@ class User(IdMixin, TenantMixin, TimestampMixin, Base):
     failed_login_count: Mapped[int] = mapped_column(default=0, server_default=text("0"))
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Set when an administrator gives the user a temporary password (see auth.service).
+    must_change_password: Mapped[bool] = mapped_column(default=False, server_default=text("false"))
+
+    # Profile photo: bytes live in encrypted storage under a server-generated key.
+    avatar_key: Mapped[str | None] = mapped_column(String(80))
+    avatar_content_type: Mapped[str | None] = mapped_column(String(32))
+    avatar_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    @property
+    def has_avatar(self) -> bool:
+        return self.avatar_key is not None
 
     __table_args__ = (
         # emails are unique *per company*: the same person may exist in two tenants
         Index("uq_users_company_email", "company_id", text("lower(email)"), unique=True),
         # target for composite FKs: (company_id, user_id) makes cross-tenant links impossible
         UniqueConstraint("company_id", "id", name="uq_users_company_id_id"),
+        CheckConstraint("(avatar_key IS NULL) = (avatar_content_type IS NULL)", name="avatar_fields_together"),
     )

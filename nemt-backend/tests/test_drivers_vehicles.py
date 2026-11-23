@@ -71,7 +71,7 @@ async def test_driver_update_filters_and_archive(client, super_token):
     tokens = await login(client, "alpha", "dan@fleet.example.com")
     assert (await client.delete(f"/drivers/{d['id']}", headers=h)).status_code == 204
     r = await client.post("/auth/login", headers={"X-Tenant": "alpha"}, json={"email": "dan@fleet.example.com", "password": PW})
-    assert r.status_code == 401                                                     # login disabled
+    assert r.status_code == 403 and "deactivated" in r.json()["detail"]      # login disabled, and says why
     assert (await client.post("/auth/refresh", json={"refresh_token": tokens["refresh_token"]})).status_code == 401
     assert (await client.get("/users/me", headers=bearer(tokens["access_token"]))).status_code == 401
     assert len((await client.get("/drivers", headers=h)).json()) == 1               # archived one is hidden

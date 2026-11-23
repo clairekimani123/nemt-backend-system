@@ -16,6 +16,7 @@ class Settings(BaseSettings):
 
     jwt_secret: SecretStr
     jwt_issuer: str = "mediroutes"
+    jwt_audience: str = "mediroutes-api"
     access_token_minutes: int = 15
     refresh_token_days: int = 14
     mfa_token_minutes: int = 5
@@ -39,6 +40,15 @@ class Settings(BaseSettings):
     geocoder_backend: str = "none"  # none | fake   (real adapters: see app/core/geo.py)
     storage_dir: str = "./var/storage"
     max_upload_mb: int = 10
+    max_avatar_kb: int = 2048           # profile photos: JPEG / PNG / WebP up to this size
+
+    # --- passenger <-> assigned driver ---
+    # When true, a driver can't start a trip ("en route") while the passenger with a portal
+    # login still has to accept the assigned driver. Dispatch can always override.
+    require_passenger_acceptance: bool = True
+    location_stale_seconds: int = 120   # a driver position older than this is flagged as stale
+    location_min_interval_seconds: int = 5  # fixes closer together than this are not stored
+    location_retention_days: int = 30   # driver positions older than this are purged nightly
 
     # --- trip engine rules (all tunable per deployment) ---
     default_trip_minutes: int = 45      # used when a trip has no duration estimate
@@ -98,6 +108,17 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:3000"
 
     celery_always_eager: bool = False
+
+    # --- installation / reset ---
+    # Web-based first-run setup (POST /setup/super-admin) is only possible when this is set AND no
+    # super admin exists. Leave it unset to allow setup only through `python -m app.scripts.bootstrap`.
+    setup_token: SecretStr | None = None
+    # Full system reset (POST /platform/system/reset). None = allowed everywhere except env=prod.
+    allow_system_reset: bool | None = None
+
+    @property
+    def system_reset_enabled(self) -> bool:
+        return self.allow_system_reset if self.allow_system_reset is not None else self.env != "prod"
 
 
 @lru_cache
