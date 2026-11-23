@@ -29,7 +29,7 @@ async def _companies_with_fleet_managers():
 
 async def fleet_expiry_digest_once() -> dict[str, int]:
     totals = {"companies": 0, "emails": 0, "vehicles_flagged": 0}
-    for company_id, email, name in _companies_with_fleet_managers():
+    async for company_id, email, name in _companies_with_fleet_managers():
         async with open_tenant_session(company_id) as db:
             dashboard = await fleet.fleet_dashboard(db, company_id)
         flagged = [v for v in dashboard if v.alerts]
